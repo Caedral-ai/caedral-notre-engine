@@ -1,0 +1,15 @@
+build/
+build-*/
+.cache/
+compile_commands.json
+
+# editors / os
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# local models & artifacts (never commit weights)
+models/
+*.gguf
+*.bin
