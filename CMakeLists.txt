@@ -8,9 +8,25 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(SOE_BUILD_TESTS "Build test suite" ON)
 option(SOE_BUILD_SERVER "Build soe-server" OFF)
 option(SOE_BUILD_CLI "Build CLI tools" OFF)
+option(SOE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
 
 add_library(soe INTERFACE)
 target_include_directories(soe INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+
+if(SOE_WITH_LLAMA)
+    # Pinned upstream (see third_party/llama.cpp). Build only libllama:
+    # no examples, tests, server or UI. Fork discipline: product logic
+    # never goes inside this subproject.
+    set(LLAMA_BUILD_EXAMPLES OFF)
+    set(LLAMA_BUILD_TESTS    OFF)
+    set(LLAMA_BUILD_TOOLS    OFF)
+    set(LLAMA_BUILD_SERVER   OFF)
+    set(LLAMA_BUILD_APP      OFF)
+    set(LLAMA_BUILD_UI       OFF)
+    set(LLAMA_BUILD_COMMON   OFF)
+    add_subdirectory(third_party/llama.cpp)
+    add_subdirectory(adapters)
+endif()
 
 if(SOE_BUILD_TESTS)
     enable_testing()
