@@ -21,9 +21,6 @@ toward **democratizing local AI**: private, censorship-resistant,
 subscription-free inference on ordinary laptops, mini-PCs and edge devices —
 your model, your data, your machine.
 
-The technical insight: a large MoE does not need to sit monolithically in RAM.
-Only a few experts per layer are active per token; the rest can be streamed
-from disk.
 
 ## Architecture (target)
 
