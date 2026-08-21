@@ -11,10 +11,10 @@ enum class EntryState { ABSENT, READING, READY, EVICTING };
 
 struct CacheEntry {
     ExpertKey key;
-    void*   ptr = nullptr;
-    size_t  bytes = 0;
+    void *ptr = nullptr;
+    size_t bytes = 0;
     EntryState state = EntryState::ABSENT;
-    int     refcount = 0;
+    int refcount = 0;
     uint64_t last_use = 0;
     uint64_t load_generation = 0;
 };

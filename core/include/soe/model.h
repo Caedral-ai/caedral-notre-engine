@@ -9,13 +9,13 @@ namespace soe {
 
 struct TensorInfo {
     std::string name;
-    uint64_t abs_offset;      // data_offset + tensor_offset
+    uint64_t abs_offset; // data_offset + tensor_offset
     uint64_t bytes_total;
-    int      expert_count;
-    int      expert_axis;
+    int expert_count;
+    int expert_axis;
     uint64_t bytes_per_expert;
     std::string quant_type;
-    size_t   io_alignment;
+    size_t io_alignment;
 };
 
 struct ModelManifest {

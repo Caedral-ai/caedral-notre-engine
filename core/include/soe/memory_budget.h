@@ -17,9 +17,7 @@ struct MemoryBudget {
     size_t staging = 0;
     size_t runtime_base = 0;
 
-    size_t total() const {
-        return dense + expert_cache + kv + staging + runtime_base;
-    }
+    size_t total() const { return dense + expert_cache + kv + staging + runtime_base; }
 };
 
 Regime classify(size_t model_bytes, size_t ram_usable);

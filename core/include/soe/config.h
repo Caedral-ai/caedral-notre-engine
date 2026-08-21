@@ -11,9 +11,9 @@ struct Config {
     std::string dense_policy = "anon";
     bool odirect = true;
     bool overlap = true;
-    int  io_lanes = 2;
+    int io_lanes = 2;
     size_t expert_cache_bytes = 2ull << 30;
-    bool lossless = true;   // accelerated/lossy modes are opt-in only, never silent
+    bool lossless = true; // accelerated/lossy modes are opt-in only, never silent
     bool verify = true;
 };
 
