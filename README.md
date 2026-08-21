@@ -67,6 +67,24 @@ third_party/        llama.cpp (upstream submodule)
 ```
 
 
+## Supported models
+
+First target — streaming in regime R3 (model ≫ RAM):
+
+| Model | Quant | Source file | Size |
+|---|---|---|---|
+| [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | Q8_0 | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | ~34.4 GiB |
+
+```sh
+./tools/download-model.sh
+# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0.gguf
+```
+
+Chosen because its Q8 GGUF far exceeds typical desktop RAM while the 3B active
+parameters keep CPU compute tractable — exactly the workload this engine
+targets. Plain Q8_0 (not a tuned dynamic quant) so the byte-identity gates have
+a deterministic reference.
+
 ## Building
 
 Not yet functional — bootstrap phase. Planned:
