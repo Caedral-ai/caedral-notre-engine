@@ -1,6 +1,5 @@
 #pragma once
 // Expert slice addressing within fused GGUF tensors.
-// Plan ref: §5 / §7.1.
 #include <cstdint>
 
 namespace soe {

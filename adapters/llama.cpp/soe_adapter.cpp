@@ -6,7 +6,7 @@
 
 namespace soe::adapter {
 
-const char* llama_version() {
+const char *llama_version() {
     // Qualified on purpose: unqualified lookup would find soe::adapter::llama_version.
     return ::llama_version();
 }

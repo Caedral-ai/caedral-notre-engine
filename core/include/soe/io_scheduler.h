@@ -1,7 +1,6 @@
 #pragma once
 // Async expert I/O pipeline: reserve -> submit -> completion -> publish READY.
 // O_DIRECT main path on Linux; bounce buffers for misaligned slices.
-// Plan ref: §9.
 #include "soe/expert_layout.h"
 #include <cstdint>
 

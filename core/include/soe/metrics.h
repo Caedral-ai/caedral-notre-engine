@@ -1,7 +1,6 @@
 #pragma once
 // Telemetry: explain every second spent in compute / io_wait / flash / cache.
 // Decision metrics are end-to-end tok/s and p95 inter-token latency.
-// Plan ref: §14 / §20.2.
 #include <cstdint>
 
 namespace soe {

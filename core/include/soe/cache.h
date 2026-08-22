@@ -1,6 +1,6 @@
 #pragma once
 // Expert residency cache. LRU by bytes, inflight dedupe, hard cap invariant:
-// engine_budget <= RAM_budget. Plan ref: §7.
+// engine_budget <= RAM_budget.
 #include "soe/expert_layout.h"
 #include <cstddef>
 #include <cstdint>

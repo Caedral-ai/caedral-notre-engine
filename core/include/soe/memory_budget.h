@@ -1,5 +1,5 @@
 #pragma once
-// Memory regimes R0-R4 and budget formula. Plan ref: §6.
+// Memory regimes R0-R4 and budget formula.
 #include <cstddef>
 
 namespace soe {

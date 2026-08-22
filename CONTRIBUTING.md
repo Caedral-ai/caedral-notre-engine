@@ -49,8 +49,8 @@ fix(gguf): validate expert span bounds before O_DIRECT read
 - One logical change per commit. **Never mix** a refactor with a behavior change.
 - Perf and its benchmark go together; correctness fixes come *before* perf work.
 - Never rewrite published history on `main`.
-- Reference the plan doc section when implementing a decision
-  (e.g. `Implements D4 — O_DIRECT main path.`).
+- Reference the motivating design discussion when implementing a significant
+  architectural decision.
 
 ## 2. Branches
 
@@ -81,26 +81,26 @@ C++17. Formatting is enforced by the checked-in [`.clang-format`](.clang-format)
 
 ## 4. Engineering invariants (non-negotiable)
 
-These mirror the architecture plan — violating any of them blocks a merge:
+These are non-negotiable — violating any of them blocks a merge:
 
 1. **Metadata-driven**: never hardcode tensor names, axes, quant types or
-   offsets (D2).
+   offsets.
 2. **Fail closed**: incomplete expert discovery with `stream=1` aborts or falls
-   back to mmap; never dereference nulls or continue silently (§5.2).
+   back to mmap; never dereference nulls or continue silently.
 3. **Lossless default**: nothing may alter the model's math silently; lossy
-   modes are explicit opt-in flags (D9).
+   modes are explicit opt-in flags.
 4. **Memory budget invariant**: `engine_budget <= RAM_budget`; hard caps are
-   never exceeded (§6.1).
+   never exceeded.
 5. **Fork discipline**: the llama.cpp fork carries only the minimal
-   expert-ready hook — zero product logic inside it (D7).
+   expert-ready hook — zero product logic inside it.
 6. **Separation of planes**: cache/policy/scheduler stay out of llama.cpp;
-   HTTP stays out of the core runtime (D8).
+   HTTP stays out of the core runtime.
 7. **No secrets, no weights**: never commit `.gguf`, API keys or local paths.
 
 ## 5. Correctness gates
 
-No optimization enters the release without passing its gate
-(plan §13). Minimum bar for every PR:
+No optimization enters the release without passing its gate.
+Minimum bar for every PR:
 
 | Gate | Criterion |
 |---|---|
@@ -111,7 +111,7 @@ No optimization enters the release without passing its gate
 | Upstream compat | seam tests pass against pinned llama.cpp |
 
 Perf PRs additionally require paired A/B numbers (tok/s, p95 inter-token,
-flash/token, hit-rate) from the benchmark protocol (§14).
+flash/token, hit-rate) from the benchmark protocol.
 
 ## 6. Tests
 

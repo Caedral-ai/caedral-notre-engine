@@ -1,6 +1,6 @@
 #pragma once
 // Engine configuration: profiles (SAFE-8G, BALANCED-16G, FAST-32G, EDGE-12G,
-// DEBUG), runtime knobs, lossless/accelerated contract. Plan ref: §3.3 / §15.
+// DEBUG), runtime knobs, lossless/accelerated contract.
 #include <cstddef>
 #include <string>
 

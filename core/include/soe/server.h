@@ -1,7 +1,6 @@
 #pragma once
 // HTTP/OpenAI-compatible server surface (soe-server). Kept separate from the
 // core runtime: an API layer over an unstable runtime only masks the problem.
-// Plan ref: §16 / §17.
 #include "soe/config.h"
 
 namespace soe {
