@@ -55,7 +55,16 @@ struct ModelManifest {
     // Convenience counters filled during validation.
     size_t routed_expert_tensors = 0;
     size_t shared_expert_tensors = 0;
-    size_t misaligned_for_odirect = 0; // abs_offset % 4096 != 0
+    size_t misaligned_for_odirect = 0; // tensor start not 4096-aligned
+    // Slice-level O_DIRECT alignment: slice k sits at start + k*bytes_per_expert.
+    //   all_slices_aligned    : every slice 4096-aligned -> zero-copy possible
+    //   uniform_misalignment  : all slices share the same misalignment (fixed
+    //                           bounce offset works)
+    //   scattered_alignment   : bytes_per_expert not 4096-multiple -> per-slice
+    //                           bounce offsets required
+    size_t all_slices_aligned = 0;
+    size_t uniform_misalignment = 0;
+    size_t scattered_alignment = 0;
 };
 
 }

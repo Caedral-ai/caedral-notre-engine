@@ -110,6 +110,16 @@ bool ModelRegistry::build(const std::string &gguf_path, ModelManifest &out) {
         }
         if (ti.abs_offset % 4096 != 0 && ti.kind == TensorKind::ROUTED_EXPERT)
             out.misaligned_for_odirect++;
+        if (ti.kind == TensorKind::ROUTED_EXPERT) {
+            if (ti.bytes_per_expert % 4096 == 0) {
+                if (ti.abs_offset % 4096 == 0)
+                    out.all_slices_aligned++;
+                else
+                    out.uniform_misalignment++;
+            } else {
+                out.scattered_alignment++;
+            }
+        }
 
         ti.quant_type = GgufReader::ggml_type_name(rt->ggml_type);
         out.tensors.push_back(std::move(ti));

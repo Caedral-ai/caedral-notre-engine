@@ -151,6 +151,8 @@ void test_live_model_if_available() {
            "(routed=%zu shared=%zu odirect_misaligned=%zu) data_offset=%llu\n",
            m.architecture.c_str(), m.n_layers, m.n_experts, m.n_experts_used, m.tensors.size(), m.routed_expert_tensors,
            m.shared_expert_tensors, m.misaligned_for_odirect, (unsigned long long)m.data_offset);
+    printf("slice alignment: all=%zu uniform_misaligned=%zu scattered=%zu\n", m.all_slices_aligned,
+           m.uniform_misalignment, m.scattered_alignment);
     assert(m.architecture == "qwen35moe");
     assert(m.n_layers == 40 && m.n_experts_used > 0);
     assert(m.routed_expert_tensors >= 3 * (size_t)m.n_layers);
