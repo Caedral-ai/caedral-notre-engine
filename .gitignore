@@ -9,6 +9,9 @@ compile_commands.json
 *.swp
 .DS_Store
 
+# internal working documents (private, never committed)
+/internal-docs/
+
 # local models & artifacts (never commit weights)
 /models/
 *.gguf
