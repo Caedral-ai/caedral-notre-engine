@@ -15,6 +15,8 @@
 
 namespace soe {
 
+class IoScheduler;
+
 struct CacheStats {
     uint64_t hits = 0;
     uint64_t misses = 0;
@@ -41,6 +43,12 @@ public:
     ~SliceCache();
 
     void set_source(Source s) { src_ = s; }
+
+    // Optional lane pool: when set, touch_batch_at fills its misses across
+    // the scheduler's lanes (parallel preads under the cache lock - same
+    // serialization as inline fills, no new races). Without it, misses run
+    // inline on the calling thread.
+    void set_scheduler(IoScheduler *s) { sched_ = s; }
 
     // Ensure slice (tensor, expert) is resident at
     //   dest = dest_window_base + expert * bytes
@@ -87,6 +95,13 @@ private:
     bool fill_slice(void* dest, const void* src, uint64_t src_off, size_t bytes,
                     const std::string& tensor, int expert);
 
+    // Evict LRU (shield-aware) until bytes fit under the hard cap.
+    void make_room_locked(size_t bytes);
+
+    // Insert a filled slice into the map/LRU and account it.
+    void commit_locked(uint64_t k, const std::string& tensor, int expert,
+                       void* dest, size_t bytes);
+
     bool touch_internal(uint64_t k, const std::string& tensor, int expert,
                         void* dest, const void* src, size_t bytes);
     bool touch_internal_at(uint64_t k, const std::string& tensor, int expert,
@@ -101,6 +116,7 @@ private:
     CacheLimits limits_;
     CacheStats stats_;
     Source src_{};
+    IoScheduler *sched_ = nullptr;
 
     std::unordered_map<uint64_t, Entry> map_;
     std::list<uint64_t> lru_;                 // front = MRU

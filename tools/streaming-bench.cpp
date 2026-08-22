@@ -4,6 +4,7 @@
 // hit-rate, cold MiB/step, evictions — to be compared against lru-sim curves.
 #include "soe/cache.h"
 #include "soe/direct_io.h"
+#include "soe/io_scheduler.h"
 #include "soe/model.h"
 #include "soe/model_registry.h"
 #include "soe/tensor_classify.h"
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 static std::mutex g_cb_mu;
 #include <map>
@@ -39,6 +41,7 @@ struct Window {
 
 static soe::DirectFile g_direct;
 static bool g_use_odirect = false;
+static std::unique_ptr<soe::IoScheduler> g_sched;
 
 static bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
     return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
@@ -310,11 +313,15 @@ int main(int argc, char** argv) {
 
     // O_DIRECT mode auto-selects on prepared inputs (io_alignment >= 4096,
     // every routed slice aligned). Misses then read straight from this file.
+    int lanes = getenv("SOE_LANES") ? atoi(getenv("SOE_LANES")) : 1;
     if (manifest.io_alignment >= 4096 &&
         manifest.all_slices_aligned == manifest.routed_expert_tensors) {
         if (g_direct.open_read(argv[1]) && g_direct.valid()) {
             g_use_odirect = true;
-            printf("fill backend: O_DIRECT (%s)\n", g_direct.direct() ? "direct" : "buffered fallback");
+            if (lanes > 1)
+                g_sched = std::make_unique<soe::IoScheduler>(lanes);
+            printf("fill backend: O_DIRECT (%s), lanes=%d\n",
+                   g_direct.direct() ? "direct" : "buffered fallback", lanes);
         }
     } else {
         printf("fill backend: memcpy from mmap\n");
@@ -329,8 +336,10 @@ int main(int argc, char** argv) {
 
     soe::SliceCache cache(soe::CacheLimits{cap_gib << 30});
     cache.set_verify_next(verify_n);
-    if (g_use_odirect)
+    if (g_use_odirect) {
         cache.set_source({od_read, &g_direct});
+        cache.set_scheduler(g_sched.get());   // null -> inline fills
+    }
     g.manifest = &manifest;
     g.cache    = &cache;
 

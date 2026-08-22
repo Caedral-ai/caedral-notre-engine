@@ -1,4 +1,5 @@
 #include "soe/cache.h"
+#include "soe/io_scheduler.h"
 
 #include <sys/mman.h>
 
@@ -97,6 +98,18 @@ bool SliceCache::touch_locked(uint64_t k, const std::string& tensor, int expert,
     // unshielded keys (the newest touches — approximates current-step
     // pinning), but the hard cap always wins: if every entry is shielded,
     // fall back to plain LRU rather than overshoot the cap.
+    make_room_locked(bytes);
+
+    if (!fill_slice(dest, src, src_off, bytes, tensor, expert))
+        abort();
+    stats_.misses++;
+    stats_.bytes_loaded += bytes;
+
+    commit_locked(k, tensor, expert, dest, bytes);
+    return false;
+}
+
+void SliceCache::make_room_locked(size_t bytes) {
     while (used_ + bytes > limits_.hard_cap_bytes) {
         uint64_t victim_key = 0;
         bool found = false;
@@ -119,12 +132,10 @@ bool SliceCache::touch_locked(uint64_t k, const std::string& tensor, int expert,
         stats_.evictions++;
         map_.erase(vit);
     }
+}
 
-    if (!fill_slice(dest, src, src_off, bytes, tensor, expert))
-        abort();
-    stats_.misses++;
-    stats_.bytes_loaded += bytes;
-
+void SliceCache::commit_locked(uint64_t k, const std::string& tensor, int expert,
+                               void* dest, size_t bytes) {
     if (bytes <= limits_.hard_cap_bytes) {
         lru_.push_front(k);
         map_.emplace(k, Entry{tensor, expert, dest, bytes, lru_.begin()});
@@ -136,7 +147,6 @@ bool SliceCache::touch_locked(uint64_t k, const std::string& tensor, int expert,
         for (auto rit = lru_.rbegin(); rit != lru_.rend() && shield_.size() > kShieldEntries / 2; ++rit)
             shield_.erase(*rit);
     }
-    return false;
 }
 
 bool SliceCache::touch(const std::string& tensor, int expert, void* dest,
@@ -173,13 +183,49 @@ size_t SliceCache::touch_batch_at(const std::string& tensor, const int* experts,
     std::unordered_set<int> uniq;
     for (int i = 0; i < n; i++) uniq.insert(experts[i]);
     stats_.dedup_requests += (size_t)(n - (int)uniq.size());
-    size_t misses = 0;
+
+    // Phase 1 (bookkeeping, under lock): classify hits, make room for misses.
+    struct Miss { uint64_t k; int expert; void* dest; uint64_t off; };
+    std::vector<Miss> miss_list;
+    miss_list.reserve(uniq.size());
     for (int e : uniq) {
-        void* d = (char*)dest_window_base + (size_t)e * bytes;
-        uint64_t off = src_base_offset + (uint64_t)e * bytes;
-        if (!touch_locked(key(tensor, e), tensor, e, d, nullptr, off, bytes)) misses++;
+        uint64_t k = key(tensor, e);
+        auto it = map_.find(k);
+        if (it != map_.end()) {
+            lru_.erase(it->second.lru_it);
+            lru_.push_front(k);
+            it->second.lru_it = lru_.begin();
+            shield_.insert(k);
+            stats_.hits++;
+            continue;
+        }
+        make_room_locked(bytes);
+        miss_list.push_back({k, e, (char*)dest_window_base + (size_t)e * bytes,
+                             src_base_offset + (uint64_t)e * bytes});
     }
-    return misses;
+    if (miss_list.empty())
+        return 0;
+
+    // Phase 2 (fills, still under lock): lanes parallelize the preads; jobs
+    // target disjoint window slices. Inline fallback when no scheduler.
+    if (sched_) {
+        if (!sched_->run(miss_list.size(), [&, bytes](size_t i) {
+                const Miss& m = miss_list[i];
+                return src_.read(m.dest, m.off, bytes, src_.ud);
+            }))
+            abort();   // fail closed: an unserved slice must never look resident
+    } else {
+        for (auto& m : miss_list)
+            if (!src_.read(m.dest, m.off, bytes, src_.ud))
+                abort();
+    }
+
+    // Phase 3: commit bookkeeping.
+    for (auto& m : miss_list)
+        commit_locked(m.k, tensor, m.expert, m.dest, bytes);
+    stats_.misses += miss_list.size();
+    stats_.bytes_loaded += miss_list.size() * bytes;
+    return miss_list.size();
 }
 
 } // namespace soe
