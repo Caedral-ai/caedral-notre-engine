@@ -43,7 +43,7 @@ std::string write_fixture(const std::string &path, bool expert_axis_last = true,
     uint32_t magic = corrupt_magic ? 0xdeadbeef : 0x46554747;
     uint32_t version = 3;
     uint64_t n_tensors = 5;
-    uint64_t n_kv = 4;
+    uint64_t n_kv = 5;
     w(f, &magic, 4);
     w_u32(f, version);
     w_u64(f, n_tensors);
@@ -61,6 +61,9 @@ std::string write_fixture(const std::string &path, bool expert_axis_last = true,
     w_str(f, "testmoe.expert_count");
     w_u32(f, 4 /*UINT32*/);
     w_u32(f, 4);
+    w_str(f, "testmoe.expert_used_count");
+    w_u32(f, 4 /*UINT32*/);
+    w_u32(f, 2);
 
     // Tensor dir (offsets relative to data start; data begins aligned to 32).
     // Layout plan: header ends ~unaligned -> pad handled by parser.
