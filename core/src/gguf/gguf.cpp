@@ -119,15 +119,23 @@ bool GgufReader::parse_kvs(uint64_t count) {
         if (type != V_STRING && type != V_ARRAY && scalar_size(type) == 0)
             return fail("unknown kv value type");
         if (type == V_UINT8 || type == V_UINT16 || type == V_UINT32 || type == V_UINT64 || type == V_BOOL) {
+            long vpos = std::ftell(f_);
+            if (vpos < 0)
+                return fail("ftell failed");
             uint64_t v = 0;
             if (!read_exact(&v, scalar_size(type)))
                 return fail("eof in kv uvalue");
             kv_u_[key] = v;
+            kv_pos_[key] = (uint64_t)vpos;
         } else if (type == V_INT8 || type == V_INT16 || type == V_INT32 || type == V_INT64) {
+            long vpos = std::ftell(f_);
+            if (vpos < 0)
+                return fail("ftell failed");
             int64_t v = 0;
             if (!read_exact(&v, scalar_size(type)))
                 return fail("eof in kv ivalue");
             kv_i_[key] = v;
+            kv_pos_[key] = (uint64_t)vpos;
         } else if (type == V_FLOAT32 || type == V_FLOAT64) {
             double v = 0;
             float vf = 0;
@@ -171,6 +179,10 @@ bool GgufReader::parse_tensor_dir(uint64_t count) {
                 return fail("eof in tensor dim");
         if (!read_exact(&t.ggml_type, 4))
             return fail("eof in tensor type");
+        long fpos = std::ftell(f_);
+        if (fpos < 0)
+            return fail("ftell failed");
+        t.offset_field_pos = (uint64_t)fpos;
         if (!read_exact(&t.rel_offset, 8))
             return fail("eof in tensor offset");
         tensors_.push_back(std::move(t));
@@ -200,6 +212,11 @@ bool GgufReader::open(const std::string &path) {
     if (!parse_kvs(n_kv))
         return false;
 
+    long kvpos = std::ftell(f_);
+    if (kvpos < 0)
+        return fail("ftell failed");
+    kv_end_ = (uint64_t)kvpos;
+
     uint64_t alignment = 32;
     kv_u64("general.alignment", alignment);
     if (alignment == 0 || (alignment & (alignment - 1)))
@@ -212,6 +229,7 @@ bool GgufReader::open(const std::string &path) {
     long pos = std::ftell(f_);
     if (pos < 0)
         return fail("ftell failed");
+    meta_end_ = (uint64_t)pos;
     data_offset_ = align_up((uint64_t)pos, alignment);
     error_.clear();
     return true;
@@ -259,6 +277,14 @@ bool GgufReader::kv_bool(const std::string &key, bool &out) const {
 }
 bool GgufReader::has_kv(const std::string &key) const {
     return kv_u_.count(key) || kv_i_.count(key) || kv_f_.count(key) || kv_s_.count(key) || kv_b_.count(key);
+}
+
+bool GgufReader::kv_scalar_value_pos(const std::string &key, uint64_t &out) const {
+    auto it = kv_pos_.find(key);
+    if (it == kv_pos_.end())
+        return false;
+    out = it->second;
+    return true;
 }
 
 const char *GgufReader::ggml_type_name(uint32_t id) {

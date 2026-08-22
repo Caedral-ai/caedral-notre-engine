@@ -18,3 +18,6 @@ target_link_libraries(soe_cb_semantics_probe PRIVATE soe_core soe_adapter)
 
 add_executable(soe_streaming_bench streaming-bench.cpp)
 target_link_libraries(soe_streaming_bench PRIVATE soe_core soe_adapter)
+
+add_executable(soe_prepare soe-prepare.cpp)
+target_link_libraries(soe_prepare PRIVATE soe_core)
