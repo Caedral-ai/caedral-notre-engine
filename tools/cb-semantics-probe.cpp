@@ -5,7 +5,7 @@
 //   computed -> the i32 router-ids tensor holds valid values -> we could
 //   fetch missing slices synchronously inside the callback.
 // Semantics B (build-only): ids->data is null/garbage at ask time -> no safe
-//   demand point -> direct kernel patch required (permitted by D7 amendment).
+//   demand point -> direct kernel patch required.
 #include "soe/model_registry.h"
 
 #include "llama.h"

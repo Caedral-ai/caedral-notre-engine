@@ -15,3 +15,6 @@ target_compile_features(soe_lru_sim PRIVATE cxx_std_17)
 
 add_executable(soe_cb_semantics_probe cb-semantics-probe.cpp)
 target_link_libraries(soe_cb_semantics_probe PRIVATE soe_core soe_adapter)
+
+add_executable(soe_streaming_bench streaming-bench.cpp)
+target_link_libraries(soe_streaming_bench PRIVATE soe_core soe_adapter)
