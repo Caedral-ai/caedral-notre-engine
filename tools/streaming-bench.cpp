@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 static std::mutex g_cb_mu;
@@ -42,6 +43,8 @@ struct Window {
 static soe::DirectFile g_direct;
 static bool g_use_odirect = false;
 static std::unique_ptr<soe::IoScheduler> g_sched;
+static double g_fill_ns = 0;   // time inside batch fills (I/O + memcpy)
+static uint64_t g_fill_calls = 0;
 
 static bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
     return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
@@ -78,6 +81,101 @@ static void read_ids_strided(const ggml_tensor* ids, std::vector<int32_t>& out) 
 }
 
 State g;
+
+// ---- P4 overlap: speculative prefetch (last-token routing reuse) ----------
+static bool g_prefetch_on = false;
+
+struct PrefetchItem {
+    std::string name;
+    std::vector<int32_t> ids;
+};
+static std::mutex g_pi_mu;
+static std::condition_variable g_pi_cv;
+static std::deque<PrefetchItem> g_pi_q;      // latest-wins
+static bool g_pi_stop = false;
+static std::thread g_pi_thread;
+static std::unique_ptr<soe::IoScheduler> g_psched;
+
+static void prefetch_worker() {
+    std::unique_ptr<soe::IoScheduler> psched = std::make_unique<soe::IoScheduler>(4);
+    for (;;) {
+        PrefetchItem it;
+        {
+            std::unique_lock<std::mutex> lk(g_pi_mu);
+            g_pi_cv.wait(lk, [] { return g_pi_stop || !g_pi_q.empty(); });
+            if (g_pi_stop && g_pi_q.empty())
+                return;
+            it = std::move(g_pi_q.front());
+            g_pi_q.pop_front();
+        }
+        auto wit = g.windows.find(it.name);
+        if (wit == g.windows.end() || !wit->second.base || !wit->second.ti)
+            continue;   // window not created yet: demand path will fill
+        g.cache->prefetch_batch_at(it.name, it.ids.data(), (int)it.ids.size(),
+                                   wit->second.base, wit->second.file_off,
+                                   wit->second.ti->bytes_per_expert, *psched);
+    }
+}
+
+// Lookahead: while computing node rank r (using fresh routing), speculate
+// nodes r+1..r+W from THEIR previous-step routing. Two id slots: the one
+// being written this step, and the read-only previous one.
+static std::unordered_map<std::string, std::vector<int32_t>> g_step_ids[2];
+static int g_id_slot = 0;
+static std::unordered_set<std::string> g_looked;
+static long g_looked_step = -1;
+static constexpr int kLookaheadNodes = 6;
+
+static int node_rank(const char* name) {
+    int L = soe::parse_layer_index(name);
+    const char* k = strstr(name, "ffn_gate_exps");
+    int kind = k ? 0 : (strstr(name, "ffn_up_exps") ? 1 : 2);
+    return L >= 0 ? L * 3 + kind : -1;
+}
+
+static std::string rank_name(int rank) {
+    // inverse of node_rank for our fixed naming scheme
+    static const char* kinds[] = {"ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"};
+    char buf[128];
+    snprintf(buf, sizeof(buf), "blk.%d.%s.weight", rank / 3, kinds[rank % 3]);
+    return buf;
+}
+
+// called from cb_eval after a node's demand fill
+static long dbg_lookahead_calls = 0;
+static void lookahead_push(const char* name) {
+    if (!g_prefetch_on)
+        return;
+    int rank = node_rank(name);
+    if (rank < 0)
+        return;
+    if (++dbg_lookahead_calls == 1 || dbg_lookahead_calls == 200)
+        fprintf(stderr, "[lookahead] call #%ld rank=%d step=%ld prev_entries=%zu\n",
+                dbg_lookahead_calls, rank, g.step, g_step_ids[g_id_slot ^ 1].size());
+    if (g_looked_step != g.step) {   // new step: reset per-step dedup
+        g_looked_step = g.step;
+        g_looked.clear();
+    }
+    const auto& prev = g_step_ids[g_id_slot ^ 1];   // previous step's routing
+    for (int a = 1; a <= kLookaheadNodes; a++) {
+        int r = rank + a;
+        std::string rn = rank_name(r);
+        auto pit = prev.find(rn);
+        if (pit == prev.end() || pit->second.empty())
+            continue;
+        if (g_looked.count(rn))
+            continue;   // already speculated this step
+        g_looked.insert(rn);
+        {
+            std::lock_guard<std::mutex> lk(g_pi_mu);
+            g_pi_q.push_back({rn, pit->second});
+        }
+        g_pi_cv.notify_one();
+    }
+}
+
+
+
 static bool g_step_fills = false;
 static long g_audit_checks = 0;
 
@@ -216,13 +314,18 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         if ((int)v.size() != n) return true;
 
         if (!g_full_fill) {
+            auto t0 = Clock::now();
             if (g_use_odirect)
                 g.cache->touch_batch_at(w->name, v.data(), n, win.base,
                                         win.file_off, win.ti->bytes_per_expert);
             else
                 g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
                                      win.ti->bytes_per_expert);
+            g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
+            g_fill_calls++;
         }
+        g_step_ids[g_id_slot][w->name] = v;   // routing of this step
+        lookahead_push(w->name);              // speculate upcoming nodes
         if (!win.rebound && w->data != win.base) {
             w->data = win.base;
             win.rebound = true;
@@ -339,6 +442,10 @@ int main(int argc, char** argv) {
     if (g_use_odirect) {
         cache.set_source({od_read, &g_direct});
         cache.set_scheduler(g_sched.get());   // null -> inline fills
+        if (getenv("SOE_PREFETCH")) {   // measured no-op at 2G/8G; kept for experiments
+            g_prefetch_on = true;
+            g_pi_thread = std::thread(prefetch_worker);
+        }
     }
     g.manifest = &manifest;
     g.cache    = &cache;
@@ -399,7 +506,21 @@ int main(int argc, char** argv) {
             return 1;
         }
         dump_logits(i);   // logits of THIS step's forward (produces token i+1)
+        g_id_slot ^= 1;   // step boundary: previous becomes read-only source
+        g_step_ids[g_id_slot].clear();
+        g_looked.clear();
+        g_looked_step = -1;
     }
+
+    // stop the prefetcher before tearing down cache/windows
+    {
+        std::lock_guard<std::mutex> lk(g_pi_mu);
+        g_pi_stop = true;
+    }
+    g_pi_cv.notify_all();
+    if (g_pi_thread.joinable())
+        g_pi_thread.join();
+    g_prefetch_on = false;
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
     printf("\n");
 
@@ -447,6 +568,11 @@ int main(int argc, char** argv) {
            cache.used_bytes() / 1048576.0, cap_gib << 10);
     printf("dedup requests     : %llu\n", (unsigned long long)st.dedup_requests);
     printf("audit checks run   : %ld | pending records: %zu\n", g_audit_checks, g_audit.size());
+    double fill_s = g_fill_ns / 1e9;
+    double fill_frac = secs > 0 ? 100.0 * fill_s / secs : 0;
+    printf("fill time          : %.2fs (%.1f%% of gen wall) over %llu batch fills\n",
+           fill_s, fill_frac, (unsigned long long)g_fill_calls);
+    printf("prefetched slices  : %llu\n", (unsigned long long)st.prefetched);
 
     llama_sampler_free(smpl);
     llama_free(ctx);

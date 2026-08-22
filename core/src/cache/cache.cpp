@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 namespace soe {
 
@@ -158,6 +160,52 @@ bool SliceCache::touch_at(const std::string& tensor, int expert, void* dest,
                           uint64_t src_offset, size_t bytes) {
     return touch_internal_at(key(tensor, expert), tensor, expert, dest, src_offset,
                              bytes);
+}
+
+void SliceCache::prefetch_batch_at(const std::string& tensor, const int* experts,
+                                   int n, void* dest_window_base,
+                                   uint64_t src_base_offset, size_t bytes,
+                                   IoScheduler& sched) {
+    if (!src_.read)
+        return;
+    // Phase 1: keep only slices that are actually absent.
+    std::vector<int> absent;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::unordered_set<int> uniq;
+        for (int i = 0; i < n; i++) uniq.insert(experts[i]);
+        for (int e : uniq)
+            if (!map_.count(key(tensor, e)))
+                absent.push_back(e);
+    }
+    if (absent.empty())
+        return;
+
+    // Phase 2: parallel reads OUTSIDE the lock (demand path never blocks on
+    // our I/O). Jobs target disjoint window slices.
+    std::vector<std::pair<int, void*>> jobs;   // (expert, dest)
+    jobs.reserve(absent.size());
+    for (int e : absent)
+        jobs.push_back({e, (char*)dest_window_base + (size_t)e * bytes});
+    if (!sched.run(jobs.size(), [&, this](size_t i) {
+            return src_.read(jobs[i].second,
+                             src_base_offset + (uint64_t)jobs[i].first * bytes,
+                             bytes, src_.ud);
+        }))
+        return;   // failed speculative reads: drop silently, demand path recovers
+
+    // Phase 3: commit entries still absent (demand path may have won the race).
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        for (auto& [e, dest] : jobs) {
+            uint64_t k = key(tensor, e);
+            if (map_.count(k))
+                continue;
+            make_room_locked(bytes);
+            commit_locked(k, tensor, e, dest, bytes);
+            stats_.prefetched++;
+        }
+    }
 }
 
 size_t SliceCache::touch_batch(const std::string& tensor, const int* experts, int n,

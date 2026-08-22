@@ -23,6 +23,7 @@ struct CacheStats {
     uint64_t bytes_loaded = 0;      // committed bytes written
     uint64_t evictions = 0;
     uint64_t dedup_requests = 0;    // repeat (tensor,id) within one batch
+    uint64_t prefetched = 0;        // slices filled by prefetch_batch_at
 };
 
 struct CacheLimits {
@@ -72,6 +73,16 @@ public:
     size_t touch_batch_at(const std::string& tensor, const int* experts, int n,
                           void* dest_window_base, uint64_t src_base_offset,
                           size_t bytes);
+
+    // Background prefetch (P4 overlap): fill absent slices via the given
+    // scheduler with the cache lock held only for filtering/committing -
+    // never during I/O. Safe to race with demand fills from another thread:
+    // double-fill is idempotent (same bytes, same destination) and insertion
+    // is re-checked under the lock. Evictions it triggers respect the shield
+    // and never straddle page boundaries (slices are 4096-multiples).
+    void prefetch_batch_at(const std::string& tensor, const int* experts, int n,
+                           void* dest_window_base, uint64_t src_base_offset,
+                           size_t bytes, IoScheduler& sched);
 
     // Debug aid: verify last-filled region matches source (offset-bug guard).
     void set_verify_next(size_t n_fills);
