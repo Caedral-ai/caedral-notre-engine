@@ -10,6 +10,6 @@ compile_commands.json
 .DS_Store
 
 # local models & artifacts (never commit weights)
-models/
+/models/
 *.gguf
 *.bin
