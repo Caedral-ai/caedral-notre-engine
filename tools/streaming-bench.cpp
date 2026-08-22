@@ -62,6 +62,7 @@ struct State {
 };
 
 struct AuditRec {
+    std::string tname;
     std::vector<int32_t> ids;
     long step;
     size_t bpe;
@@ -142,16 +143,12 @@ static std::string rank_name(int rank) {
 }
 
 // called from cb_eval after a node's demand fill
-static long dbg_lookahead_calls = 0;
 static void lookahead_push(const char* name) {
     if (!g_prefetch_on)
         return;
     int rank = node_rank(name);
     if (rank < 0)
         return;
-    if (++dbg_lookahead_calls == 1 || dbg_lookahead_calls == 200)
-        fprintf(stderr, "[lookahead] call #%ld rank=%d step=%ld prev_entries=%zu\n",
-                dbg_lookahead_calls, rank, g.step, g_step_ids[g_id_slot ^ 1].size());
     if (g_looked_step != g.step) {   // new step: reset per-step dedup
         g_looked_step = g.step;
         g_looked.clear();
@@ -265,127 +262,154 @@ void ensure_window(const char* name, ggml_tensor* w) {
 }
 
 bool cb_eval(ggml_tensor* t, bool ask, void*) {
-    if (!g_rebind) {
-        if (!ask && t && t->op == GGML_OP_MUL_MAT_ID) maybe_dump_dst(t, g.step);
+    // P4 flow: isolate only ROUTERS (ffn_moe_topk) and MUL_MAT_IDs - 160/step
+    // instead of ~7800. Fresh ids are harvested at the router's ask=false and
+    // stashed per layer; MMID asks serve from that stash, so the notorious
+    // ids-tensor staleness inside batched regions stops mattering.
+    if (!t)
         return true;
-    }
-    static bool dump_all = getenv("SOE_DUMP_ALL") != nullptr;
-    if (!ask && dump_all && t && t->op == GGML_OP_MUL_MAT_ID && !g_audit.count(t->src[0] ? t->src[0] : t))
-        maybe_dump_dst(t, g.step);
-    long n = ++g_ask_n;
-    if (n <= 100) {
-        long tid = (long)gettid();
-        static std::mutex m2;
-        std::lock_guard<std::mutex> lk(m2);
-        if (++g_tids[tid] == 2) fprintf(stderr, "[bench] !!! SECOND THREAD in callback: tid=%ld (ask #%ld)\n", tid, n);
-    }
-    if (!t || t->op != GGML_OP_MUL_MAT_ID) return true;
-    if (ask) {
-        ggml_tensor* w   = nullptr;
-        ggml_tensor* ids = nullptr;
-        for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++) {
-            auto* s = t->src[i];
-            if (!ids && s->type == GGML_TYPE_I32) ids = s;
-            else if (!w && s->name) {
-                auto it = g.windows.find(s->name);
-                if (it != g.windows.end() ||
-                    [&] {
-                        for (const auto& ti : g.manifest->tensors)
-                            if (ti.name == s->name)
-                                return ti.kind == soe::TensorKind::ROUTED_EXPERT;
-                        return false;
-                    }())
-                    w = s;
-            }
-        }
-        if (!w || !ids || !ids->data) return true;
+    const char* nm = t->name ? t->name : "";
+    bool is_router = strstr(nm, "ffn_moe_topk") != nullptr;
+    bool is_mmid = t->op == GGML_OP_MUL_MAT_ID;
+    if (!is_router && !is_mmid)
+        return ask ? false : true;   // batch everything else
 
-        ensure_window(w->name, w);
-        auto wit = g.windows.find(w->name);
-        if (wit == g.windows.end()) return true;   // layer-limited out: stays mmap
-        Window& win = wit->second;
-        if (!win.base || !win.ti || !w->data) return true;
-        if (!g_use_odirect && !win.orig) return true;   // memcpy mode needs mirror
+    static std::unordered_map<int, std::vector<int32_t>> g_fresh;  // layer -> ids
 
-        int n = (int)ggml_nelements(ids);
-        if (n <= 0 || n > 4096) return true;
-        static thread_local std::vector<int32_t> v;
-        read_ids_strided(ids, v);
-        if ((int)v.size() != n) return true;
-
-        if (!g_full_fill) {
+    // ---- ROUTER ----
+    if (is_router) {
+        if (ask)
+            return true;   // isolate: it computes alone, then we harvest
+        int L = soe::parse_layer_index(nm);
+        if (L < 0 || !t->data || t->type != GGML_TYPE_I32)
+            return true;
+        std::vector<int32_t> v;
+        read_ids_strided(t, v);
+        if (v.empty())
+            return true;
+        g_fresh[L] = std::move(v);
+        // opportunistic fill: if this layer's windows already exist (they do
+        // from the previous evaluation onward), serve them NOW - off the
+        // critical path of anything that matters.
+        if (!g_rebind || !g_use_odirect || g_full_fill)
+            return true;
+        char buf[96];
+        for (int k = 0; k < 3; k++) {
+            static const char* kinds[] = {"ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"};
+            snprintf(buf, sizeof(buf), "blk.%d.%s.weight", L, kinds[k]);
+            auto wit = g.windows.find(buf);
+            if (wit == g.windows.end() || !wit->second.base || !wit->second.ti)
+                continue;   // first evaluation: MMID asks will create + serve
             auto t0 = Clock::now();
-            if (g_use_odirect)
-                g.cache->touch_batch_at(w->name, v.data(), n, win.base,
-                                        win.file_off, win.ti->bytes_per_expert);
-            else
-                g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
-                                     win.ti->bytes_per_expert);
+            g.cache->touch_batch_at(buf, g_fresh[L].data(), (int)g_fresh[L].size(),
+                                    wit->second.base, wit->second.file_off,
+                                    wit->second.ti->bytes_per_expert);
             g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
             g_fill_calls++;
         }
-        g_step_ids[g_id_slot][w->name] = v;   // routing of this step
-        lookahead_push(w->name);              // speculate upcoming nodes
-        if (!win.rebound && w->data != win.base) {
-            w->data = win.base;
-            win.rebound = true;
-            fprintf(stderr, "[bench] rebound %s\n", w->name);
-        }
+        return true;
+    }
 
-        // post-compute audit state: remember ids + node for the ask=false pass
-        g_audit[w] = {v, g.step, win.ti->bytes_per_expert};
-        if (g_step_fills) {
-            char buf[4096]; int off = 0;
-            for (int i = 0; i < (int)v.size() && off < 4000; i++)
-                off += snprintf(buf + off, sizeof(buf) - off, "%d,", v[i]);
-            fprintf(stderr, "[fills] step %ld %s n=%d [%s]\n", g.step, w->name, n, buf);
-        }
-    } else {
-        // ask=false: this MUL_MAT_ID just computed. Audit pending record.
-        ggml_tensor* wten = nullptr;
+    // ---- MUL_MAT_ID ----
+    if (!ask) {
+        // post-compute audit / dumps
+        AuditRec rec;
+        bool have = false;
         for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++)
-            if (t->src[i] && g_audit.count(t->src[i])) { wten = t->src[i]; break; }
-        if (!wten) return true;
-        AuditRec rec = g_audit[wten];
-        g_audit.erase(wten);
+            if (t->src[i] && g_audit.count(t->src[i])) {
+                rec = g_audit[t->src[i]];
+                g_audit.erase(t->src[i]);
+                have = true;
+                break;
+            }
         maybe_dump_dst(t, g.step);
-        if (rec.step != g.step) return true;
-        auto wit = g.windows.find(wten->name);
-        if (wit == g.windows.end()) return true;
-        Window& win = wit->second;
-        ggml_tensor* ids_now = nullptr;
-        for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++)
-            if (t->src[i]->type == GGML_TYPE_I32) { ids_now = t->src[i]; break; }
-        if (!ids_now || !ids_now->data) return true;
-        int nn = (int)ggml_nelements(ids_now);
-        static thread_local std::vector<int32_t> v_post;
-        read_ids_strided(ids_now, v_post);
-        if ((int)v_post.size() != nn || nn != (int)rec.ids.size() ||
-            memcmp(rec.ids.data(), v_post.data(), nn * 4) != 0) {
-            fprintf(stderr, "[audit] step %ld %s: IDS CHANGED between ask and post\n",
-                    g.step, wten->name);
-            return true;
-        }
-        g_audit_checks++;
-        bool odirect = g_use_odirect;
-        if (!odirect) {
-            for (int i = 0; i < nn; i++) {
-                int e = rec.ids[i];
-                if (e < 0 || e >= 256) continue;
-                const void* d = (const char*)win.base + (size_t)e * rec.bpe;
-                const void* s = (const char*)win.orig + (size_t)e * rec.bpe;
-                if (memcmp(d, s, rec.bpe) != 0) {
-                    fprintf(stderr, "[audit] step %ld %s: SLICE %d CORRUPT post-compute\n",
-                            g.step, wten->name, e);
-                    break;
+        if (have && rec.step == g.step && !g_use_odirect) {
+            auto wit = g.windows.find(rec.tname);
+            if (wit != g.windows.end()) {
+                Window& win = wit->second;
+                for (int e : rec.ids) {
+                    if (e < 0 || e >= 256) continue;
+                    if (memcmp((const char*)win.base + (size_t)e * rec.bpe,
+                               (const char*)win.orig + (size_t)e * rec.bpe,
+                               rec.bpe) != 0) {
+                        fprintf(stderr, "[audit] step %ld %s: SLICE %d CORRUPT\n",
+                                g.step, rec.tname.c_str(), e);
+                        break;
+                    }
                 }
             }
         }
-        // In odirect mode there is no mmap mirror to compare against;
-        // DirectFile already fails closed on short/misaligned reads.
-        if (wten->data != win.base)
-            fprintf(stderr, "[audit] step %ld %s: REPOINT LOST post-compute\n",
-                    g.step, wten->name);
+        return true;
+    }
+
+    // ask: discover weight + bind window + serve from FRESH router ids
+    ggml_tensor* w = nullptr;
+    ggml_tensor* ids = nullptr;
+    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++) {
+        auto* s = t->src[i];
+        if (!ids && s->type == GGML_TYPE_I32) ids = s;
+        else if (!w && s->name) {
+            auto it = g.windows.find(s->name);
+            if (it != g.windows.end() ||
+                [&] {
+                    for (const auto& ti : g.manifest->tensors)
+                        if (ti.name == s->name)
+                            return ti.kind == soe::TensorKind::ROUTED_EXPERT;
+                    return false;
+                }())
+                w = s;
+        }
+    }
+    if (!w || !ids || !ids->data) return true;
+
+    ensure_window(w->name, w);
+    auto wit = g.windows.find(w->name);
+    if (wit == g.windows.end()) return true;   // layer-limited out: stays mmap
+    Window& win = wit->second;
+    if (!win.base || !win.ti || !w->data) return true;
+    if (!g_use_odirect && !win.orig) return true;   // memcpy mode needs mirror
+
+    int n = (int)ggml_nelements(ids);
+    if (n <= 0 || n > 4096) return true;
+    static thread_local std::vector<int32_t> v;
+    int L = soe::parse_layer_index(w->name);
+    auto fit = g_fresh.find(L);
+    if (fit != g_fresh.end() && (int)fit->second.size() == n &&
+        fit->second.size() == (size_t)ggml_nelements(ids)) {
+        v = fit->second;   // fresh routing harvested from this eval's router
+    } else {
+        read_ids_strided(ids, v);   // fallback (should not happen once warm)
+        if ((int)v.size() != n) return true;
+    }
+
+    auto t0 = Clock::now();
+    if (!g_full_fill) {
+        if (g_use_odirect)
+            g.cache->touch_batch_at(w->name, v.data(), n, win.base,
+                                    win.file_off, win.ti->bytes_per_expert);
+        else
+            g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
+                                 win.ti->bytes_per_expert);
+        g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
+        g_fill_calls++;
+    }
+    if (g_prefetch_on)
+        g_step_ids[g_id_slot][w->name] = v;
+    lookahead_push(w->name);
+
+    if (!win.rebound && w->data != win.base) {
+        w->data = win.base;
+        win.rebound = true;
+        fprintf(stderr, "[bench] rebound %s\n", w->name);
+    }
+
+    g_audit[w] = {w->name, v, g.step, win.ti->bytes_per_expert};
+    if (getenv("SOE_STEP_FILLS")) {
+        char buf2[4096];
+        int off = 0;
+        for (int i = 0; i < (int)v.size() && off < 4000; i++)
+            off += snprintf(buf2 + off, sizeof(buf2) - off, "%d,", v[i]);
+        fprintf(stderr, "[fills] step %ld %s n=%d [%s]\n", g.step, w->name, n, buf2);
     }
     return true;
 }
