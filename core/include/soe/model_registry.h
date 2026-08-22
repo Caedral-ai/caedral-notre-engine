@@ -18,4 +18,4 @@ private:
     std::string error_;
 };
 
-} // namespace soe
+}

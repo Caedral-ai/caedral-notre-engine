@@ -69,4 +69,4 @@ private:
     std::vector<RawTensor> tensors_;
 };
 
-} // namespace soe
+}

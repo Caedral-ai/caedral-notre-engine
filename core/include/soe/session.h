@@ -13,4 +13,4 @@ private:
     uint64_t id_;
 };
 
-} // namespace soe
+}

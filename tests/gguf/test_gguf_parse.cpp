@@ -161,7 +161,7 @@ void test_live_model_if_available() {
     assert(contiguous_routed > 0);
 }
 
-} // namespace
+}
 
 int main() {
     test_good_fixture();

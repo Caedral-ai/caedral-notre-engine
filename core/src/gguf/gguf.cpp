@@ -53,7 +53,7 @@ uint64_t align_up(uint64_t v, uint64_t a) {
     return a ? (v + a - 1) / a * a : v;
 }
 
-} // namespace
+}
 
 GgufReader::~GgufReader() {
     if (f_)
@@ -273,4 +273,4 @@ const char *GgufReader::ggml_type_name(uint32_t id) {
     return "unknown";
 }
 
-} // namespace soe
+}

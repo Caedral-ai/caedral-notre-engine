@@ -58,4 +58,4 @@ struct ModelManifest {
     size_t misaligned_for_odirect = 0; // abs_offset % 4096 != 0
 };
 
-} // namespace soe
+}

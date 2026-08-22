@@ -12,4 +12,4 @@ TensorKind classify_tensor(const std::string &architecture, const std::string &n
 // Extracts the layer index from "blk.N."-style names. Returns -1 if absent.
 int parse_layer_index(const std::string &name);
 
-} // namespace soe
+}

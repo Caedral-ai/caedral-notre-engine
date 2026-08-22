@@ -11,6 +11,7 @@ AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 BreakBeforeBraces: Attach
+FixNamespaceComments: false
 DerivePointerAlignment: false
 PointerAlignment: Right
 SortIncludes: CaseSensitive

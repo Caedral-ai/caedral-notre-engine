@@ -16,4 +16,4 @@ public:
     explicit Server(Config cfg);
 };
 
-} // namespace soe
+}

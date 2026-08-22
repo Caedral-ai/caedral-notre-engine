@@ -18,4 +18,4 @@ struct Metrics {
     double inflight_dedup_rate = 0;
 };
 
-} // namespace soe
+}

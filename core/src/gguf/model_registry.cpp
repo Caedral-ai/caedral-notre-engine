@@ -16,7 +16,7 @@ struct Span {
     uint64_t end;
 };
 
-} // namespace
+}
 
 bool ModelRegistry::build(const std::string &gguf_path, ModelManifest &out) {
     namespace fs = std::filesystem;
@@ -134,4 +134,4 @@ bool ModelRegistry::build(const std::string &gguf_path, ModelManifest &out) {
     return true;
 }
 
-} // namespace soe
+}

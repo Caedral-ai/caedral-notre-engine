@@ -17,4 +17,4 @@ struct Config {
     bool verify = true;
 };
 
-} // namespace soe
+}

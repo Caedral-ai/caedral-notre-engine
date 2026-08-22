@@ -8,4 +8,4 @@ namespace soe::adapter {
 const char *llama_version();
 bool llama_backend_init_once();
 
-} // namespace soe::adapter
+}

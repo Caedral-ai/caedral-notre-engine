@@ -20,4 +20,4 @@ bool llama_backend_init_once() {
     return true;
 }
 
-} // namespace soe::adapter
+}

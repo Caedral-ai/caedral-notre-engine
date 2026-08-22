@@ -22,4 +22,4 @@ struct MemoryBudget {
 
 Regime classify(size_t model_bytes, size_t ram_usable);
 
-} // namespace soe
+}

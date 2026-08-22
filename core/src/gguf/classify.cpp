@@ -12,7 +12,7 @@ bool has_suffix(const std::string &s, const char *suf) {
     return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
 }
 
-} // namespace
+}
 
 int parse_layer_index(const std::string &name) {
     const std::string marker = "blk.";
@@ -57,4 +57,4 @@ TensorKind classify_tensor(const std::string &arch, const std::string &name) {
     return TensorKind::OTHER;
 }
 
-} // namespace soe
+}
