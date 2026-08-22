@@ -1,0 +1,5 @@
+# MemoryBudget unit tests.
+add_executable(soe_test_memory_budget test_memory_budget.cpp)
+target_link_libraries(soe_test_memory_budget PRIVATE soe_core)
+target_compile_features(soe_test_memory_budget PRIVATE cxx_std_17)
+add_test(NAME memory_budget COMMAND soe_test_memory_budget)

@@ -5,6 +5,7 @@
 #include "soe/cache.h"
 #include "soe/direct_io.h"
 #include "soe/io_scheduler.h"
+#include "soe/memory_budget.h"
 #include "soe/model.h"
 #include "soe/model_registry.h"
 #include "soe/tensor_classify.h"
@@ -45,6 +46,7 @@ static bool g_use_odirect = false;
 static std::unique_ptr<soe::IoScheduler> g_sched;
 static double g_fill_ns = 0;   // time inside batch fills (I/O + memcpy)
 static uint64_t g_fill_calls = 0;
+static size_t g_use_cap = 0;
 
 static bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
     return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
@@ -424,7 +426,7 @@ int main(int argc, char** argv) {
                 argv[0]);
         return 2;
     }
-    size_t cap_gib = argc > 2 ? (size_t)atoll(argv[2]) : 2;
+    size_t cap_gib = argc > 2 ? (size_t)atoll(argv[2]) : 8;   // budget-clamped later
     int n_gen      = argc > 3 ? atoi(argv[3]) : 64;
     size_t verify_n = argc > 4 ? (size_t)atoll(argv[4]) : 64;
     g_rebind        = argc > 5 ? atoi(argv[5]) != 0 : true;
@@ -437,6 +439,28 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[streaming-bench] manifest FAILED: %s\n", reg.error().c_str());
         return 1;
     }
+
+    // Budget manager: clamp the cache cap to what this machine can hold.
+    // The 12G-cap OOM experiment is impossible by construction now.
+    soe::MemoryBudget budget = soe::MemoryBudget::detect();
+    budget.kv = 64u << 20;         // measured: llama compute buffer + KV/S-state
+    budget.staging = 64u << 20;
+    budget.runtime_base = 512u << 20;
+    size_t requested = cap_gib << 30;
+    size_t effective = budget.clamp_cache_cap(requested);
+    if (effective != requested)
+        fprintf(stderr, "[budget] cache cap clamped: %zu GiB -> %zu GiB "
+                        "(available %.1f GiB)\n",
+                (size_t)cap_gib, effective >> 30,
+                budget.mem_available / 1073741824.0);
+    {
+        auto regime = soe::classify((size_t)manifest.file_size, budget.mem_available);
+        printf("budget: available=%.1f GiB model=%.1f GiB regime=%s cap=%zu MiB\n",
+               budget.mem_available / 1073741824.0,
+               manifest.file_size / 1073741824.0,
+               soe::regime_name(regime), effective >> 20);
+    }
+    g_use_cap = effective;
 
     // O_DIRECT mode auto-selects on prepared inputs (io_alignment >= 4096,
     // every routed slice aligned). Misses then read straight from this file.
@@ -461,7 +485,7 @@ int main(int argc, char** argv) {
     llama_model* model = llama_model_load_from_file(argv[1], mparams);
     if (!model) { fprintf(stderr, "[streaming-bench] LOAD FAILED\n"); return 1; }
 
-    soe::SliceCache cache(soe::CacheLimits{cap_gib << 30});
+    soe::SliceCache cache(soe::CacheLimits{g_use_cap});
     cache.set_verify_next(verify_n);
     if (g_use_odirect) {
         cache.set_source({od_read, &g_direct});
@@ -498,7 +522,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("windows created: %zu | cap: %zu GiB\n", g.windows.size(), cap_gib);
+    printf("windows created: %zu | cap: %zu MiB\n", g.windows.size(), g_use_cap >> 20);
 
     llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
@@ -589,7 +613,7 @@ int main(int argc, char** argv) {
                     : 0.0);
     printf("bytes loaded       : %.2f MiB | evictions: %llu | used: %.2f / %zu MiB\n",
            st.bytes_loaded / 1048576.0, (unsigned long long)st.evictions,
-           cache.used_bytes() / 1048576.0, cap_gib << 10);
+           cache.used_bytes() / 1048576.0, g_use_cap >> 10);
     printf("dedup requests     : %llu\n", (unsigned long long)st.dedup_requests);
     printf("audit checks run   : %ld | pending records: %zu\n", g_audit_checks, g_audit.size());
     double fill_s = g_fill_ns / 1e9;
