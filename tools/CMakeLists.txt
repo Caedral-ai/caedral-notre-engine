@@ -6,3 +6,9 @@ target_link_libraries(soe_rebind_probe PRIVATE soe_core soe_adapter)
 
 add_executable(soe_identity_gate identity-gate.cpp)
 target_link_libraries(soe_identity_gate PRIVATE soe_core soe_adapter)
+
+add_executable(soe_touch_recorder touch-recorder.cpp)
+target_link_libraries(soe_touch_recorder PRIVATE soe_core soe_adapter)
+
+add_executable(soe_lru_sim lru-sim.cpp)
+target_compile_features(soe_lru_sim PRIVATE cxx_std_17)
