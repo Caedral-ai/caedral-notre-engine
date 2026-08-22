@@ -86,7 +86,9 @@ static void read_ids_strided(const ggml_tensor* ids, std::vector<int32_t>& out) 
 State g;
 
 // ---- P4 overlap: speculative prefetch (last-token routing reuse) ----------
-static bool g_prefetch_on = false;
+
+enum class PfMode { OFF, FULL, LOOKAHEAD };
+static PfMode g_pf_mode = PfMode::OFF;
 
 struct PrefetchItem {
     std::string name;
@@ -146,7 +148,7 @@ static std::string rank_name(int rank) {
 
 // called from cb_eval after a node's demand fill
 static void lookahead_push(const char* name) {
-    if (!g_prefetch_on)
+    if (g_pf_mode != PfMode::LOOKAHEAD)
         return;
     int rank = node_rank(name);
     if (rank < 0)
@@ -395,7 +397,7 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
         g_fill_calls++;
     }
-    if (g_prefetch_on)
+    if (g_pf_mode != PfMode::OFF)
         g_step_ids[g_id_slot][w->name] = v;
     lookahead_push(w->name);
 
@@ -490,9 +492,16 @@ int main(int argc, char** argv) {
     if (g_use_odirect) {
         cache.set_source({od_read, &g_direct});
         cache.set_scheduler(g_sched.get());   // null -> inline fills
-        if (getenv("SOE_PREFETCH")) {   // measured no-op at 2G/8G; kept for experiments
-            g_prefetch_on = true;
+        const char* pf = getenv("SOE_PREFETCH");
+        std::string pfs = pf ? pf : "";
+        if (pfs == "1" || pfs == "lookahead")
+            g_pf_mode = PfMode::LOOKAHEAD;
+        else if (pfs == "full")
+            g_pf_mode = PfMode::FULL;
+        if (g_pf_mode != PfMode::OFF) {
             g_pi_thread = std::thread(prefetch_worker);
+            printf("prefetch: %s mode\n",
+                   g_pf_mode == PfMode::FULL ? "FULL" : "LOOKAHEAD");
         }
     }
     g.manifest = &manifest;
@@ -554,6 +563,17 @@ int main(int argc, char** argv) {
             return 1;
         }
         dump_logits(i);   // logits of THIS step's forward (produces token i+1)
+        // FULL-mode overlap: speculate the ENTIRE next step from this step's
+        // routing. No-op when the cache already retains the working set;
+        // decisive when capacity pressure evicts slices between steps.
+        if (g_pf_mode == PfMode::FULL) {
+            std::lock_guard<std::mutex> lk(g_pi_mu);
+            g_pi_q.clear();
+            for (auto& [nm, ids] : g_step_ids[g_id_slot])
+                if (!ids.empty())
+                    g_pi_q.push_back({nm, ids});
+            g_pi_cv.notify_one();
+        }
         g_id_slot ^= 1;   // step boundary: previous becomes read-only source
         g_step_ids[g_id_slot].clear();
         g_looked.clear();
@@ -568,7 +588,6 @@ int main(int argc, char** argv) {
     g_pi_cv.notify_all();
     if (g_pi_thread.joinable())
         g_pi_thread.join();
-    g_prefetch_on = false;
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
     printf("\n");
 
