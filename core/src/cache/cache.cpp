@@ -40,14 +40,48 @@ uint64_t SliceCache::key(const std::string& t, int e) const {
 
 void SliceCache::set_verify_next(size_t n_fills) { verify_remaining_ = n_fills; }
 
+bool SliceCache::fill_slice(void* dest, const void* src, uint64_t src_off,
+                            size_t bytes, const std::string& tensor, int expert) {
+    if (src) {
+        std::memcpy(dest, src, bytes);
+    } else if (src_.read) {
+        if (!src_.read(dest, src_off, bytes, src_.ud)) {
+            fprintf(stderr, "[slice-cache] FILL FAILED (backend) %s#%d\n",
+                    tensor.c_str(), expert);
+            return false;
+        }
+    } else {
+        fprintf(stderr, "[slice-cache] no fill source configured\n");
+        return false;
+    }
+    if (verify_remaining_ && src) {
+        // memcmp guard only exists in pointer mode; backend reads are trusted
+        // upstack (DirectFile fails closed on short/misaligned reads).
+        if (std::memcmp(dest, src, bytes) != 0) {
+            fprintf(stderr, "[slice-cache] VERIFY MISMATCH %s#%d\n", tensor.c_str(),
+                    expert);
+            abort();
+        }
+        verify_remaining_--;
+    }
+    return true;
+}
+
 bool SliceCache::touch_internal(uint64_t k, const std::string& tensor, int expert,
                                 void* dest, const void* src, size_t bytes) {
     std::lock_guard<std::mutex> lk(mu_);
-    return touch_locked(k, tensor, expert, dest, src, bytes);
+    return touch_locked(k, tensor, expert, dest, src, 0, bytes);
+}
+
+bool SliceCache::touch_internal_at(uint64_t k, const std::string& tensor, int expert,
+                                   void* dest, uint64_t src_offset, size_t bytes) {
+    std::lock_guard<std::mutex> lk(mu_);
+    return touch_locked(k, tensor, expert, dest, nullptr, src_offset, bytes);
 }
 
 bool SliceCache::touch_locked(uint64_t k, const std::string& tensor, int expert,
-                              void* dest, const void* src, size_t bytes) {
+                              void* dest, const void* src, uint64_t src_off,
+                              size_t bytes) {
     auto it = map_.find(k);
     if (it != map_.end()) {
         // Hit: refresh recency.
@@ -86,15 +120,8 @@ bool SliceCache::touch_locked(uint64_t k, const std::string& tensor, int expert,
         map_.erase(vit);
     }
 
-    std::memcpy(dest, src, bytes);
-    if (verify_remaining_) {
-        if (std::memcmp(dest, src, bytes) != 0) {
-            fprintf(stderr, "[slice-cache] VERIFY MISMATCH %s#%d\n", tensor.c_str(),
-                    expert);
-            abort();
-        }
-        verify_remaining_--;
-    }
+    if (!fill_slice(dest, src, src_off, bytes, tensor, expert))
+        abort();
     stats_.misses++;
     stats_.bytes_loaded += bytes;
 
@@ -117,6 +144,12 @@ bool SliceCache::touch(const std::string& tensor, int expert, void* dest,
     return touch_internal(key(tensor, expert), tensor, expert, dest, src, bytes);
 }
 
+bool SliceCache::touch_at(const std::string& tensor, int expert, void* dest,
+                          uint64_t src_offset, size_t bytes) {
+    return touch_internal_at(key(tensor, expert), tensor, expert, dest, src_offset,
+                             bytes);
+}
+
 size_t SliceCache::touch_batch(const std::string& tensor, const int* experts, int n,
                                void* dest_window_base, const void* src_base,
                                size_t bytes) {
@@ -128,7 +161,23 @@ size_t SliceCache::touch_batch(const std::string& tensor, const int* experts, in
     for (int e : uniq) {
         void*       d = (char*)dest_window_base + (size_t)e * bytes;
         const void* s = (const char*)src_base + (size_t)e * bytes;
-        if (!touch_locked(key(tensor, e), tensor, e, d, s, bytes)) misses++;
+        if (!touch_locked(key(tensor, e), tensor, e, d, s, 0, bytes)) misses++;
+    }
+    return misses;
+}
+
+size_t SliceCache::touch_batch_at(const std::string& tensor, const int* experts, int n,
+                                  void* dest_window_base, uint64_t src_base_offset,
+                                  size_t bytes) {
+    std::lock_guard<std::mutex> lk(mu_);
+    std::unordered_set<int> uniq;
+    for (int i = 0; i < n; i++) uniq.insert(experts[i]);
+    stats_.dedup_requests += (size_t)(n - (int)uniq.size());
+    size_t misses = 0;
+    for (int e : uniq) {
+        void* d = (char*)dest_window_base + (size_t)e * bytes;
+        uint64_t off = src_base_offset + (uint64_t)e * bytes;
+        if (!touch_locked(key(tensor, e), tensor, e, d, nullptr, off, bytes)) misses++;
     }
     return misses;
 }

@@ -29,8 +29,18 @@ struct CacheLimits {
 
 class SliceCache {
 public:
+    // Fill backend for misses. When unset, fills memcpy from a caller-provided
+    // pointer (mmap mode). When set, fills call read(dest, src_offset, bytes, ud)
+    // - e.g. O_DIRECT pread from a prepared GGUF (offsets 4096-aligned).
+    struct Source {
+        bool (*read)(void *dest, uint64_t src_offset, size_t bytes, void *ud) = nullptr;
+        void *ud = nullptr;
+    };
+
     SliceCache(CacheLimits limits);
     ~SliceCache();
+
+    void set_source(Source s) { src_ = s; }
 
     // Ensure slice (tensor, expert) is resident at
     //   dest = dest_window_base + expert * bytes
@@ -39,10 +49,21 @@ public:
     bool touch(const std::string& tensor, int expert, void* dest, const void* src,
                size_t bytes);
 
+    // Offset-source variant: on miss the configured Source reads
+    // src_offset + expert*bytes into dest.
+    bool touch_at(const std::string& tensor, int expert, void* dest,
+                  uint64_t src_offset, size_t bytes);
+
     // Batch convenience: dedupes repeated (tensor,expert) pairs, then fills.
     // Returns number of misses serviced.
     size_t touch_batch(const std::string& tensor, const int* experts, int n,
                        void* dest_window_base, const void* src_base, size_t bytes);
+
+    // Batch variant for the offset-source backend: slices live at
+    // src_base_offset + expert*bytes in the backing store.
+    size_t touch_batch_at(const std::string& tensor, const int* experts, int n,
+                          void* dest_window_base, uint64_t src_base_offset,
+                          size_t bytes);
 
     // Debug aid: verify last-filled region matches source (offset-bug guard).
     void set_verify_next(size_t n_fills);
@@ -60,10 +81,18 @@ private:
     };
     uint64_t key(const std::string& t, int e) const;
 
+    // Unified miss fill: pointer mode when src != nullptr, backend mode when
+    // src_offset is used (src == nullptr). Returns false on backend failure
+    // (fail-closed: caller aborts; a failed fill must never look resident).
+    bool fill_slice(void* dest, const void* src, uint64_t src_off, size_t bytes,
+                    const std::string& tensor, int expert);
+
     bool touch_internal(uint64_t k, const std::string& tensor, int expert,
                         void* dest, const void* src, size_t bytes);
+    bool touch_internal_at(uint64_t k, const std::string& tensor, int expert,
+                           void* dest, uint64_t src_offset, size_t bytes);
     bool touch_locked(uint64_t k, const std::string& tensor, int expert,
-                      void* dest, const void* src, size_t bytes);
+                      void* dest, const void* src, uint64_t src_off, size_t bytes);
 
     // Callbacks arrive on multiple OpenMP worker threads (E13): all
     // mutations are serialized internally.
@@ -71,6 +100,7 @@ private:
 
     CacheLimits limits_;
     CacheStats stats_;
+    Source src_{};
 
     std::unordered_map<uint64_t, Entry> map_;
     std::list<uint64_t> lru_;                 // front = MRU

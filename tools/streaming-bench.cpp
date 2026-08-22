@@ -3,6 +3,7 @@
 // windows per fused tensor, rebinding on first touch. Reports tok/s,
 // hit-rate, cold MiB/step, evictions — to be compared against lru-sim curves.
 #include "soe/cache.h"
+#include "soe/direct_io.h"
 #include "soe/model.h"
 #include "soe/model_registry.h"
 #include "soe/tensor_classify.h"
@@ -30,10 +31,18 @@ using Clock = std::chrono::steady_clock;
 
 struct Window {
     void* base = nullptr;
-    void* orig = nullptr;      // original llama mapping (copy source)
+    void* orig = nullptr;      // original llama mapping (copy source; memcpy mode)
+    uint64_t file_off = 0;     // tensor start in backing store (odirect mode)
     bool  rebound = false;
     const soe::TensorInfo* ti = nullptr;
 };
+
+static soe::DirectFile g_direct;
+static bool g_use_odirect = false;
+
+static bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
+    return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
+}
 
 struct State {
     const soe::ModelManifest* manifest = nullptr;
@@ -129,7 +138,8 @@ void ensure_window(const char* name, ggml_tensor* w) {
         if (ti.name == name && ti.kind == soe::TensorKind::ROUTED_EXPERT) {
             Window win;
             win.ti   = &ti;
-            win.orig = w->data;
+            win.file_off = ti.abs_offset;
+            win.orig = g_use_odirect ? nullptr : w->data;
             win.base = mmap(nullptr, ti.bytes_total, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
             if (win.base == MAP_FAILED) {
@@ -193,7 +203,8 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         auto wit = g.windows.find(w->name);
         if (wit == g.windows.end()) return true;   // layer-limited out: stays mmap
         Window& win = wit->second;
-        if (!win.base || !win.orig || !win.ti || !w->data) return true;
+        if (!win.base || !win.ti || !w->data) return true;
+        if (!g_use_odirect && !win.orig) return true;   // memcpy mode needs mirror
 
         int n = (int)ggml_nelements(ids);
         if (n <= 0 || n > 4096) return true;
@@ -201,9 +212,14 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         read_ids_strided(ids, v);
         if ((int)v.size() != n) return true;
 
-        if (!g_full_fill)
-            g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
-                                 win.ti->bytes_per_expert);
+        if (!g_full_fill) {
+            if (g_use_odirect)
+                g.cache->touch_batch_at(w->name, v.data(), n, win.base,
+                                        win.file_off, win.ti->bytes_per_expert);
+            else
+                g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
+                                     win.ti->bytes_per_expert);
+        }
         if (!win.rebound && w->data != win.base) {
             w->data = win.base;
             win.rebound = true;
@@ -236,28 +252,31 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
             if (t->src[i]->type == GGML_TYPE_I32) { ids_now = t->src[i]; break; }
         if (!ids_now || !ids_now->data) return true;
         int nn = (int)ggml_nelements(ids_now);
-        if (nn != (int)rec.ids.size()) {
-            fprintf(stderr, "[audit] step %ld %s: ids size changed ask=%zu post=%d\n",
-                    g.step, wten->name, rec.ids.size(), nn);
-            return true;
-        }
         static thread_local std::vector<int32_t> v_post;
         read_ids_strided(ids_now, v_post);
-        if (memcmp(rec.ids.data(), v_post.data(), nn * 4) != 0)
+        if ((int)v_post.size() != nn || nn != (int)rec.ids.size() ||
+            memcmp(rec.ids.data(), v_post.data(), nn * 4) != 0) {
             fprintf(stderr, "[audit] step %ld %s: IDS CHANGED between ask and post\n",
                     g.step, wten->name);
+            return true;
+        }
         g_audit_checks++;
-        for (int i = 0; i < nn; i++) {
-            int e = rec.ids[i];
-            if (e < 0 || e >= 256) continue;
-            const void* d = (const char*)win.base + (size_t)e * rec.bpe;
-            const void* s = (const char*)win.orig + (size_t)e * rec.bpe;
-            if (memcmp(d, s, rec.bpe) != 0) {
-                fprintf(stderr, "[audit] step %ld %s: SLICE %d CORRUPT post-compute\n",
-                        g.step, wten->name, e);
-                break;
+        bool odirect = g_use_odirect;
+        if (!odirect) {
+            for (int i = 0; i < nn; i++) {
+                int e = rec.ids[i];
+                if (e < 0 || e >= 256) continue;
+                const void* d = (const char*)win.base + (size_t)e * rec.bpe;
+                const void* s = (const char*)win.orig + (size_t)e * rec.bpe;
+                if (memcmp(d, s, rec.bpe) != 0) {
+                    fprintf(stderr, "[audit] step %ld %s: SLICE %d CORRUPT post-compute\n",
+                            g.step, wten->name, e);
+                    break;
+                }
             }
         }
+        // In odirect mode there is no mmap mirror to compare against;
+        // DirectFile already fails closed on short/misaligned reads.
         if (wten->data != win.base)
             fprintf(stderr, "[audit] step %ld %s: REPOINT LOST post-compute\n",
                     g.step, wten->name);
@@ -289,6 +308,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // O_DIRECT mode auto-selects on prepared inputs (io_alignment >= 4096,
+    // every routed slice aligned). Misses then read straight from this file.
+    if (manifest.io_alignment >= 4096 &&
+        manifest.all_slices_aligned == manifest.routed_expert_tensors) {
+        if (g_direct.open_read(argv[1]) && g_direct.valid()) {
+            g_use_odirect = true;
+            printf("fill backend: O_DIRECT (%s)\n", g_direct.direct() ? "direct" : "buffered fallback");
+        }
+    } else {
+        printf("fill backend: memcpy from mmap\n");
+    }
+
     llama_backend_init();
     auto mparams = llama_model_default_params();
     mparams.n_gpu_layers    = 0;
@@ -298,6 +329,8 @@ int main(int argc, char** argv) {
 
     soe::SliceCache cache(soe::CacheLimits{cap_gib << 30});
     cache.set_verify_next(verify_n);
+    if (g_use_odirect)
+        cache.set_source({od_read, &g_direct});
     g.manifest = &manifest;
     g.cache    = &cache;
 
@@ -366,8 +399,9 @@ int main(int argc, char** argv) {
 
     // full-window integrity check: every expert slice in every window must
     // match the original mapping byte-for-byte (zeros where never touched
-    // would mean the kernel read unfilled data; foreign writes reveal overlap)
-    if (g_rebind && !g_full_fill) {
+    // would mean the kernel read unfilled data; foreign writes reveal overlap).
+    // Skipped in O_DIRECT mode: there is no mmap mirror to compare against.
+    if (g_rebind && !g_full_fill && !g_use_odirect) {
         for (auto& [name, win] : g.windows) {
             if (!win.base || !win.orig || !win.ti) continue;
             size_t bpe = win.ti->bytes_per_expert;
