@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(SOE_BUILD_TESTS "Build test suite" ON)
 option(SOE_BUILD_SERVER "Build soe-server" OFF)
 option(SOE_BUILD_CLI "Build CLI tools" OFF)
+option(SOE_BUILD_TOOLS "Build developer tools (graph probe)" ON)
 option(SOE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
 
 add_library(soe INTERFACE)
@@ -33,6 +34,10 @@ endif()
 if(SOE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(SOE_BUILD_TOOLS)
+    add_subdirectory(tools)
 endif()
 
 if(SOE_BUILD_SERVER)
