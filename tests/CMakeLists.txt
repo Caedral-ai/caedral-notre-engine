@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Placeholder: wire test targets as modules land (P0+).
-# Planned suites: correctness, gguf, cache, io, memory, server.
+if(SOE_BUILD_TESTS AND NOT CMAKE_VERSION VERSION_LESS 3.10)
+    enable_testing()
+    add_subdirectory(gguf)
+endif()

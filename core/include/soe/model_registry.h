@@ -1,16 +1,21 @@
 #pragma once
 // Expert tensor discovery + pre-start validation.
-// Fail closed: stream=1 with incomplete registry must abort or fall back to mmap.
-// Plan ref: §5.
+// Fail closed: stream=1 with an incomplete registry must abort or fall back
+// to mmap — never dereference nulls, never continue silently.
 #include "soe/model.h"
+
+#include <string>
 
 namespace soe {
 
 class ModelRegistry {
 public:
-    // Scan GGUF shard(s) and build the manifest. Returns false if any
-    // expected expert tensor is missing or offsets are invalid.
+    // Parses the GGUF, classifies tensors and validates the manifest.
     bool build(const std::string &gguf_path, ModelManifest &out);
+    const std::string &error() const { return error_; }
+
+private:
+    std::string error_;
 };
 
 } // namespace soe

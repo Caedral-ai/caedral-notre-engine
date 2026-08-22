@@ -13,6 +13,8 @@ option(SOE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
 add_library(soe INTERFACE)
 target_include_directories(soe INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 
+add_subdirectory(core/src)
+
 if(SOE_WITH_LLAMA)
     # Pinned upstream (see third_party/llama.cpp). Build only libllama:
     # no examples, tests, server or UI. Fork discipline: product logic
