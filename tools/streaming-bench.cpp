@@ -534,7 +534,7 @@ int main(int argc, char** argv) {
 
     // O_DIRECT mode auto-selects on prepared inputs (io_alignment >= 4096,
     // every routed slice aligned). Misses then read straight from this file.
-    int lanes = getenv("SOE_LANES") ? atoi(getenv("SOE_LANES")) : 1;
+    int lanes = getenv("SOE_LANES") ? atoi(getenv("SOE_LANES")) : 4;   // device-saturated beyond 4
     if (manifest.io_alignment >= 4096 &&
         manifest.all_slices_aligned == manifest.routed_expert_tensors) {
         if (g_direct.open_read(argv[1]) && g_direct.valid()) {
@@ -548,14 +548,33 @@ int main(int argc, char** argv) {
         printf("fill backend: memcpy from mmap\n");
     }
 
+    // Dense policy: explicit env wins; otherwise AUTO from detected regime -
+    // R2+ (model well above available RAM) prefers anon-dense (fault-free),
+    // smaller regimes stay mmap (nothing to protect from reclaim).
     {
         const char* dp = getenv("SOE_DENSE");
-        std::string s = dp ? dp : "mmap";
-        if (s == "warm") g_dense = DensePolicy::WARM;
-        else if (s == "anon") g_dense = DensePolicy::ANON;
+        std::string s = dp ? dp : "";
+        soe::MemoryBudget pre = soe::MemoryBudget::detect();
+        uint64_t dense_bytes = 0;
         for (const auto& ti : manifest.tensors)
-            if (ti.kind != soe::TensorKind::ROUTED_EXPERT)
+            if (ti.kind != soe::TensorKind::ROUTED_EXPERT) {
                 g_dense_names.insert(ti.name);
+                dense_bytes += ti.bytes_total;
+            }
+        soe::Regime reg = soe::classify((size_t)manifest.file_size, pre.mem_available);
+        printf("regime=%s (available %.1f GiB, dense %.2f GiB)\n",
+               soe::regime_name(reg), pre.mem_available / 1073741824.0,
+               dense_bytes / 1073741824.0);
+        if (s.empty())
+            g_dense = (reg != soe::Regime::R0_RESIDENT &&
+                       pre.mem_available > dense_bytes * 2)
+                          ? DensePolicy::ANON
+                          : DensePolicy::MMAP;
+        else if (s == "warm") g_dense = DensePolicy::WARM;
+        else if (s == "anon") g_dense = DensePolicy::ANON;
+        printf("dense policy: %s\n",
+               g_dense == DensePolicy::ANON ? "anon"
+               : g_dense == DensePolicy::WARM ? "warm" : "mmap");
     }
 
     // WARM policy: page in all dense spans before context creation.
@@ -634,12 +653,22 @@ int main(int argc, char** argv) {
                g_dense_bind.size(), g_dense_anon_bytes >> 20);
     }
 
-    const char* prompt = "The capital of France is";
+    const char* prompt = getenv("SOE_PROMPT") ? getenv("SOE_PROMPT")
+                                             : "The capital of France is";
     const auto* vocab  = llama_model_get_vocab(model);
     std::vector<llama_token> toks(32);
-    int n_tok = llama_tokenize(vocab, prompt, (int)strlen(prompt),
+    int n_tok = -1;
+    // llama_tokenize contract: negative return = required token count.
+    while (n_tok < 0) {
+        if ((size_t)(-n_tok) > toks.size())
+            toks.resize((size_t)(-n_tok));
+        n_tok = llama_tokenize(vocab, prompt, (int)strlen(prompt),
                                toks.data(), (int)toks.size(), true, false);
+        if (n_tok < 0 && (size_t)(-n_tok) == toks.size())
+            toks.resize(toks.size() * 2);
+    }
     toks.resize(n_tok);
+    printf("prefill tokens: %d (n_ctx %d)\n", n_tok, (int)cparams.n_ctx);
     if (llama_decode(ctx, llama_batch_get_one(toks.data(), n_tok))) {
         fprintf(stderr, "[streaming-bench] PREFILL FAILED\n");
         return 1;
