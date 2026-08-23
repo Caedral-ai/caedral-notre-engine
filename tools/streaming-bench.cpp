@@ -19,6 +19,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
+#include <unordered_set>
 #include <memory>
 #include <mutex>
 static std::mutex g_cb_mu;
@@ -28,6 +30,7 @@ static std::mutex g_cb_mu;
 #include <thread>
 #include <atomic>
 #include <unistd.h>
+#include <sys/resource.h>
 
 namespace {
 
@@ -47,6 +50,61 @@ static std::unique_ptr<soe::IoScheduler> g_sched;
 static double g_fill_ns = 0;   // time inside batch fills (I/O + memcpy)
 static uint64_t g_fill_calls = 0;
 static size_t g_use_cap = 0;
+
+// ---- P5: dense residency policies ----------------------------------------
+enum class DensePolicy { MMAP, WARM, ANON };
+static DensePolicy g_dense = DensePolicy::MMAP;
+static std::unordered_map<std::string, void*> g_dense_bind;   // name -> anon copy
+static std::unordered_set<std::string> g_dense_names;         // manifest non-routed names
+static size_t g_dense_anon_bytes = 0;
+static bool g_anon_scan = false;                              // warmup pass observes all nodes
+
+// bind one weight tensor to an anonymous copy (ANON policy)
+static void try_bind_dense(const ggml_tensor* s) {
+    if (!s || !s->name || !s->data || s->type == GGML_TYPE_I32) return;
+    std::string nm(s->name);
+    if (!g_dense_names.count(nm) || g_dense_bind.count(nm)) return;
+    size_t bytes = ggml_nbytes(s);
+    if (bytes == 0 || bytes > (2ull << 30)) return;
+    void* buf = nullptr;
+    if (posix_memalign(&buf, 4096, bytes) != 0) return;
+    memcpy(buf, s->data, bytes);
+    ((ggml_tensor*)s)->data = buf;
+    g_dense_bind[nm] = buf;
+    g_dense_anon_bytes += bytes;
+}
+
+static long dbg_scan_nodes = 0;
+static void scan_dense_srcs(ggml_tensor* t) {
+    if (!t) return;
+    if (++dbg_scan_nodes % 500 == 1)
+        fprintf(stderr, "[anon-scan] node #%ld op=%d name='%s'\n",
+                dbg_scan_nodes, (int)t->op, t->name ? t->name : "(null)");
+    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++) {
+        const ggml_tensor* s = t->src[i];
+        if (dbg_scan_nodes <= 3 && i < 4 && s && s->name)
+            fprintf(stderr, "[anon-scan]   src[%d] type=%d name='%s'\n",
+                    i, (int)s->type, s->name);
+        try_bind_dense(s);
+    }
+}
+
+// RSS / fault telemetry
+struct MemSnap { long minflt=0, majflt=0, rss_kib=0, hwm_kib=0; };
+static MemSnap mem_snap() {
+    MemSnap m;
+    struct rusage ru; getrusage(RUSAGE_SELF, &ru);
+    m.minflt = ru.ru_minflt; m.majflt = ru.ru_majflt;
+    std::ifstream st("/proc/self/status");
+    std::string line;
+    while (std::getline(st, line)) {
+        if (line.compare(0, 6, "VmRSS:") == 0)
+            m.rss_kib = atol(line.c_str() + 6);
+        else if (line.compare(0, 6, "VmHWM:") == 0)
+            m.hwm_kib = atol(line.c_str() + 6);
+    }
+    return m;
+}
 
 static bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
     return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
@@ -272,6 +330,10 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
     // ids-tensor staleness inside batched regions stops mattering.
     if (!t)
         return true;
+    if (g_anon_scan) {   // P5 ANON policy: one warmup pass observes every node
+        scan_dense_srcs(t);
+        return true;
+    }
     const char* nm = t->name ? t->name : "";
     bool is_router = strstr(nm, "ffn_moe_topk") != nullptr;
     bool is_mmid = t->op == GGML_OP_MUL_MAT_ID;
@@ -480,6 +542,38 @@ int main(int argc, char** argv) {
         printf("fill backend: memcpy from mmap\n");
     }
 
+    {
+        const char* dp = getenv("SOE_DENSE");
+        std::string s = dp ? dp : "mmap";
+        if (s == "warm") g_dense = DensePolicy::WARM;
+        else if (s == "anon") g_dense = DensePolicy::ANON;
+        for (const auto& ti : manifest.tensors)
+            if (ti.kind != soe::TensorKind::ROUTED_EXPERT)
+                g_dense_names.insert(ti.name);
+    }
+
+    // WARM policy: page in all dense spans before context creation.
+    if (g_dense == DensePolicy::WARM) {
+        auto t0 = Clock::now();
+        FILE* f = fopen(argv[1], "rb");
+        if (!f) { fprintf(stderr, "[dense] warm open failed\n"); return 1; }
+        char wbuf[1 << 20];
+        size_t warmed = 0;
+        for (const auto& ti : manifest.tensors) {
+            if (ti.kind == soe::TensorKind::ROUTED_EXPERT) continue;
+            if (fseeko(f, (off_t)ti.abs_offset, SEEK_SET) != 0) continue;
+            uint64_t left = ti.bytes_total;
+            while (left) {
+                size_t c = left < sizeof(wbuf) ? (size_t)left : sizeof(wbuf);
+                if (fread(wbuf, 1, c, f) != c) break;
+                left -= c; warmed += c;
+            }
+        }
+        fclose(f);
+        double secs = std::chrono::duration<double>(Clock::now() - t0).count();
+        printf("dense=warm: %.1f MiB paged in (%.2fs)\n", warmed / 1048576.0, secs);
+    }
+
     llama_backend_init();
     auto mparams = llama_model_default_params();
     mparams.n_gpu_layers    = 0;
@@ -520,6 +614,20 @@ int main(int argc, char** argv) {
     if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
     llama_set_warmup(ctx, false);
 
+    // ANON policy: one scan decode binds every dense weight to anon memory,
+    // then memory is cleared so generation state is pristine.
+    if (g_dense == DensePolicy::ANON) {
+        g_anon_scan = true;
+        llama_token b = llama_vocab_bos(llama_model_get_vocab(model));
+        llama_batch wb = llama_batch_get_one(&b, 1);
+        if (llama_decode(ctx, wb))
+            fprintf(stderr, "[dense] anon scan decode failed (continuing)\n");
+        g_anon_scan = false;
+        llama_memory_clear(llama_get_memory(ctx), true);
+        printf("dense=anon: %zu tensors bound, %zu MiB anonymous\n",
+               g_dense_bind.size(), g_dense_anon_bytes >> 20);
+    }
+
     const char* prompt = "The capital of France is";
     const auto* vocab  = llama_model_get_vocab(model);
     std::vector<llama_token> toks(32);
@@ -537,6 +645,7 @@ int main(int argc, char** argv) {
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     uint64_t misses_before = cache.stats().misses;
+    MemSnap snap0 = mem_snap();
     auto t0 = Clock::now();
     printf("tokens:");
     int produced = 0;
@@ -589,7 +698,10 @@ int main(int argc, char** argv) {
     if (g_pi_thread.joinable())
         g_pi_thread.join();
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
-    printf("\n");
+    MemSnap snap1 = mem_snap();
+    printf("\n[mem] minflt+%ld majflt+%ld rss=%.2f GiB hwm=%.2f GiB\n",
+           snap1.minflt - snap0.minflt, snap1.majflt - snap0.majflt,
+           snap1.rss_kib / 1048576.0, snap1.hwm_kib / 1048576.0);
 
     auto st = cache.stats();
     uint64_t gen_misses = st.misses - misses_before;
