@@ -77,19 +77,10 @@ static void try_bind_dense(const ggml_tensor* s) {
     g_dense_anon_bytes += bytes;
 }
 
-static long dbg_scan_nodes = 0;
 static void scan_dense_srcs(ggml_tensor* t) {
     if (!t) return;
-    if (++dbg_scan_nodes % 500 == 1)
-        fprintf(stderr, "[anon-scan] node #%ld op=%d name='%s'\n",
-                dbg_scan_nodes, (int)t->op, t->name ? t->name : "(null)");
-    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++) {
-        const ggml_tensor* s = t->src[i];
-        if (dbg_scan_nodes <= 3 && i < 4 && s && s->name)
-            fprintf(stderr, "[anon-scan]   src[%d] type=%d name='%s'\n",
-                    i, (int)s->type, s->name);
-        try_bind_dense(s);
-    }
+    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++)
+        try_bind_dense(t->src[i]);
 }
 
 // RSS / fault telemetry
@@ -157,7 +148,6 @@ State g;
 static float g_l2_mass = 0.0f;      // 0 = disabled (lossless)
 static int g_l2_min_k = 2;
 static long g_l2_dropped_slices = 0;
-static std::unordered_map<int, std::vector<uint8_t>> g_fresh_keep; // per layer
 
 // ---- Overlap: speculative prefetch (last-token routing reuse) -------------
 
@@ -346,18 +336,26 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
     // ids-tensor staleness inside batched regions stops mattering.
     if (!t)
         return true;
+    static long cb_vis = 0;
+    if (++cb_vis <= 15 && t->name)
+        fprintf(stderr, "[cb] #%ld name='%s' op=%d\n",
+                cb_vis, t->name, (int)t->op);
     if (g_anon_scan) {   // ANON policy: one warmup pass observes every node
         scan_dense_srcs(t);
         return true;
     }
-    // Router detection must be STRUCTURAL (top-k op), not name-based:
-    // most graph nodes carry generic pool names ("node_768").
-    bool is_router = t->op == GGML_OP_TOP_K;
+    // Router node = the MoE routing argsort over ALL expert probabilities,
+    // named 'ffn_moe_argsort-<layer>' holding ranked ids [n_exp, n_tokens].
+    // ggml_top_k compiles to argsort + view: there is no TOP_K op node and
+    // most nodes carry generic pool names - match op AND name prefix.
+    const char* nm = t->name ? t->name : "";
+    const bool is_router = ask == false || true ? (t->op == GGML_OP_ARGSORT &&
+                           strncmp(nm, "ffn_moe_argsort", 15) == 0) : false;
     bool is_mmid = t->op == GGML_OP_MUL_MAT_ID;
     if (!is_router && !is_mmid)
         return ask ? false : true;   // batch everything else
 
-    static std::unordered_map<int, std::vector<int32_t>> g_fresh;  // layer -> ids
+    static std::unordered_map<int, std::vector<int32_t>> g_fresh_kept; // layer -> kept ids
 
     // ---- ROUTER ----
     if (is_router) {
@@ -371,76 +369,57 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         if (v.empty())
             return true;
 
-        std::vector<uint8_t> keep(v.size(), 1);
-        if (g_l2_mass > 0.0f && !g_anon_scan) {
-            // routing weights live in the top-k input (src[0]): softmax
-            // probabilities over all experts, strided like the ids tensor.
-            const ggml_tensor* pr = t->src[0] ? t->src[0] : nullptr;
-            bool l2_ok = pr && pr->type == GGML_TYPE_F32 && pr->data &&
-                         ggml_nelements(pr) >= (int64_t)v.size();
-            if (l2_ok) {
-                const int64_t k = t->ne[0], ntok = t->ne[1];
-                static bool dbg_once = false;
-                for (int64_t col = 0; col < ntok && l2_ok; col++) {
-                    double wsel[4096];
-                    int idx[4096];
-                    double sum = 0.0;
-                    if (!dbg_once && getenv("SOE_L2_DEBUG")) {
-                        dbg_once = true;
-                        fprintf(stderr, "[L2dbg] probs ne=[%lld,%lld] nb=[%lld,%lld] "
-                                        "ids ne=[%lld,%lld]\n",
-                                (long long)pr->ne[0], (long long)pr->ne[1],
-                                (long long)pr->nb[0], (long long)pr->nb[1],
-                                (long long)t->ne[0], (long long)t->ne[1]);
-                    }
-                    for (int64_t j = 0; j < k && j < 4096; j++) {
-                        float p;
-                        memcpy(&p, (const char*)pr->data + col * pr->nb[1] +
-                                       j * pr->nb[0], 4);
-                        int32_t e = v[col * k + j];
-                        idx[j] = (int)j;
-                        wsel[j] = (double)p;
-                        (void)e;
-                        sum += wsel[j];
-                    }
-                    if (sum <= 0) { l2_ok = false; break; }
-                    if (col == 0 && getenv("SOE_L2_DEBUG")) {
-                        fprintf(stderr, "[L2dbg] col0 raw p:");
-                        for (int64_t j = 0; j < k && j < 8; j++)
-                            fprintf(stderr, " %.4f", wsel[j]);
-                        fprintf(stderr, "\n");
-                    }
-                    // ids arrive sorted desc by weight (top-k contract)
-                    double cum = 0.0;
-                    int m = (int)k;
-                    for (int64_t j = 0; j < k; j++) {
-                        cum += wsel[j] / sum;
-                        if (cum >= (double)g_l2_mass) { m = (int)j + 1; break; }
-                    }
-                    if (m < g_l2_min_k) m = g_l2_min_k;
-                    if (m > (int)k) m = (int)k;
-                    for (int64_t j = m; j < k; j++) {
-                        // zero the probability slot: downstream get_rows +
-                        // renormalization reduce the dropped expert to zero
-                        // contribution without touching the static graph.
-                        char* addr = (char*)pr->data + col * pr->nb[1] + j * pr->nb[0];
-                        const float zero = 0.0f;
-                        memcpy(addr, &zero, 4);
-                        keep[col * k + j] = 0;
-                        g_l2_dropped_slices++;
-                    }
+        // Rank-aware conditional execution (L2): the argsort output holds
+        // ALL experts ranked per token; selection_probs (src[0]) holds their
+        // probabilities. Walk ranks ascending accumulating normalized mass
+        // over the USED ranks; ranks past the threshold are DROPPED - their
+        // expert ids are simply excluded from the fill list, so their window
+        // slices stay zero and contribute nothing (no graph writes needed -
+        // pool aliasing makes callback writes unsafe).
+        const ggml_tensor* probs = t->src[0] ? t->src[0] : nullptr;
+        const int64_t n_exp = t->ne[0], ntok = t->ne[1];
+        const int64_t used = g.manifest ? (int64_t)g.manifest->n_experts_used : 0;
+        bool can_gate = g_l2_mass > 0.0f && !g_anon_scan &&
+                        probs && probs->type == GGML_TYPE_F32 && probs->data &&
+                        probs->ne[0] == n_exp && probs->ne[1] == ntok &&
+                        used > 0 && used <= n_exp;
+        std::vector<int32_t> kept_ids;
+        if (!can_gate) {
+            for (int64_t col = 0; col < ntok; col++)
+                for (int64_t r = 0; r < used; r++) {
+                    int32_t e;
+                    memcpy(&e, (const char*)t->data +
+                                r * t->nb[0] + col * t->nb[1], 4);
+                    kept_ids.push_back(e);
                 }
-            } else {
-                static bool warned = false;
-                if (!warned) {
-                    fprintf(stderr, "[L2] could not locate routing weights - "
-                                    "knob inactive this layer\n");
-                    warned = true;
+        } else {
+            for (int64_t col = 0; col < ntok; col++) {
+                double p[4096];
+                double sel = 0.0;
+                for (int64_t r = 0; r < used && r < 4096; r++) {
+                    memcpy(&p[r], (const char*)probs->data +
+                               r * probs->nb[0] + col * probs->nb[1], 4);
+                    sel += p[r];
+                }
+                if (!(sel > 0)) continue;
+                // ranks arrive sorted desc by probability (argsort contract)
+                double cum = 0.0;
+                int64_t m = used;
+                for (int64_t r = 0; r < used && r < 4096; r++) {
+                    cum += p[r] / sel;
+                    if (cum >= (double)g_l2_mass) { m = r + 1; break; }
+                }
+                if (m < g_l2_min_k) m = g_l2_min_k;
+                for (int64_t r = m; r < used; r++) g_l2_dropped_slices++;
+                for (int64_t r = 0; r < m; r++) {
+                    int32_t e;
+                    memcpy(&e, (const char*)t->data +
+                                r * t->nb[0] + col * t->nb[1], 4);
+                    kept_ids.push_back(e);
                 }
             }
         }
-        g_fresh[L] = std::move(v);
-        g_fresh_keep[L] = std::move(keep);
+        g_fresh_kept[L] = std::move(kept_ids);
         // opportunistic fill: if this layer's windows already exist (they do
         // from the previous evaluation onward), serve them NOW - off the
         // critical path of anything that matters.
@@ -453,8 +432,10 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
             auto wit = g.windows.find(buf);
             if (wit == g.windows.end() || !wit->second.base || !wit->second.ti)
                 continue;   // first evaluation: MMID asks will create + serve
+            auto& kept = g_fresh_kept[L];
+            if (kept.empty()) { wit = g.windows.end(); continue; }
             auto t0 = Clock::now();
-            g.cache->touch_batch_at(buf, g_fresh[L].data(), (int)g_fresh[L].size(),
+            g.cache->touch_batch_at(buf, kept.data(), (int)kept.size(),
                                     wit->second.base, wit->second.file_off,
                                     wit->second.ti->bytes_per_expert);
             g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
@@ -522,101 +503,35 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
     if (!win.base || !win.ti || !w->data) return true;
     if (!g_use_odirect && !win.orig) return true;   // memcpy mode needs mirror
 
-    int n = (int)ggml_nelements(ids);
-    if (n <= 0 || n > 4096) return true;
-    static thread_local std::vector<int32_t> v;
+    std::vector<int32_t> v;
     int L = soe::parse_layer_index(w->name);
-    auto fit = g_fresh.find(L);
-    if (fit != g_fresh.end() && (int)fit->second.size() == n &&
-        fit->second.size() == (size_t)ggml_nelements(ids)) {
-        v = fit->second;   // fresh routing harvested from this eval's router
-    } else {
-        read_ids_strided(ids, v);   // fallback (should not happen once warm)
-        if ((int)v.size() != n) return true;
-    }
-
-    // L2: build the keep-mask by walking the ids tensor's ancestry to its
-    // F32 score ancestor (top-k is built as argsort+view, so there is no
-    // TOP_K-op node and names are generic pool names). Dropped experts are
-    // never streamed; their window slices stay zero so their weighted
-    // contribution vanishes (no renormalization - documented deviation).
-    std::vector<uint8_t> keep((size_t)n, 1);
-    bool l2_applied = false;
-    bool ok_scores = true;
-    // EXPERIMENTAL graph-walk discovery: the F32 score ancestor is an
-    // in-place ACC node whose pool aliasing segfaults on some builds.
-    // Gated off by default; the durable path is the D7 expert-ready hook.
-    static bool l2_experimental = getenv("SOE_L2_EXPERIMENTAL") != nullptr;
-    if (g_l2_mass > 0.0f && l2_experimental && ids->src[0]) {
-        const ggml_tensor* sc = ids->src[0];
-        int guard = 0;
-        while (sc && sc->src[0] && sc->type != GGML_TYPE_F32 && guard++ < 8) {
-            fprintf(stderr, "[L2walk] hop %d: op=%d type=%d ne=[%lld,%lld]\n",
-                    guard, (int)sc->op, (int)sc->type,
-                    (long long)sc->ne[0], (long long)sc->ne[1]);
-            sc = sc->src[0];
-        }
-        fprintf(stderr, "[L2walk] stop: op=%d type=%d ne=[%lld,%lld]\n",
-                sc ? (int)sc->op : -1, sc ? (int)sc->type : -1,
-                sc ? (long long)sc->ne[0] : -1LL,
-                sc ? (long long)sc->ne[1] : -1LL);
-        const int n_exp = g.manifest ? g.manifest->n_experts : 0;
-        if (sc && sc->type == GGML_TYPE_F32 && sc->data &&
-            n_exp > 0 && (int64_t)sc->ne[0] == n_exp) {
-            const int64_t k = t->ne[0], ntok = t->ne[1] ? t->ne[1] : 1;
-            for (int64_t c2 = 0; c2 < (int64_t)n; c2++)
-                if (v[c2] < 0 || v[c2] >= n_exp) { ok_scores = false; break; }
-            for (int64_t col = 0; ok_scores && col < ntok; col++) {
-                double wsel[4096];
-                double sum = 0.0;
-                for (int64_t j = 0; j < k && j < 4096; j++) {
-                    float p;
-                    memcpy(&p, (const char*)sc->data +
-                                sc->nb[0] * v[col * k + j] + sc->nb[1] * col, 4);
-                    wsel[j] = (double)p;
-                    sum += wsel[j];
-                }
-                if (sum <= 0) continue;
-                double cum = 0.0;
-                int m = (int)k;
-                for (int64_t j = 0; j < k; j++) {
-                    cum += wsel[j] / sum;
-                    if (cum >= (double)g_l2_mass) { m = (int)j + 1; break; }
-                }
-                if (m < g_l2_min_k) m = g_l2_min_k;
-                if (m > (int)k) m = (int)k;
-                for (int64_t j = m; j < k; j++) {
-                    keep[col * k + j] = 0;
-                    l2_applied = true;
-                }
-            }
+    {
+        auto kit = g_fresh_kept.find(L);
+        if (kit != g_fresh_kept.end() && !kit->second.empty())
+            v = kit->second;   // fresh + mass-filtered routing from this eval's router
+        else {
+            read_ids_strided(ids, v);   // lossless fallback (no stash: knob off)
         }
     }
-    if (l2_applied)
-        g_l2_dropped_slices += (long)(n - (long)std::count(keep.begin(),
-                                                           keep.end(), 1));
+    const int n = (int)v.size();
+    if (n <= 0 || n > 8192) return true;
 
-    static thread_local std::vector<int32_t> v_kept;
-    v_kept.clear();
-    for (int i = 0; i < n; i++)
-        if (keep[i]) v_kept.push_back(v[i]);
-    if (v_kept.empty()) v_kept = v;
 
     auto t0 = Clock::now();
     if (!g_full_fill) {
         if (g_use_odirect)
-            g.cache->touch_batch_at(w->name, v_kept.data(), (int)v_kept.size(),
+            g.cache->touch_batch_at(w->name, v.data(), (int)v.size(),
                                     win.base, win.file_off,
                                     win.ti->bytes_per_expert);
         else
-            g.cache->touch_batch(w->name, v_kept.data(), (int)v_kept.size(),
+            g.cache->touch_batch(w->name, v.data(), (int)v.size(),
                                  win.base, win.orig,
                                  win.ti->bytes_per_expert);
         g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
         g_fill_calls++;
     }
     if (g_pf_mode != PfMode::OFF)
-        g_step_ids[g_id_slot][w->name] = v_kept;
+        g_step_ids[g_id_slot][w->name] = v;
     lookahead_push(w->name);   // speculates kept routing only
 
     if (!win.rebound && w->data != win.base) {
@@ -625,7 +540,7 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         fprintf(stderr, "[bench] rebound %s\n", w->name);
     }
 
-    g_audit[w] = {w->name, v_kept, g.step, win.ti->bytes_per_expert};
+    g_audit[w] = {w->name, v, g.step, win.ti->bytes_per_expert};
     if (getenv("SOE_STEP_FILLS")) {
         char buf2[4096];
         int off = 0;
