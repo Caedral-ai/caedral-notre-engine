@@ -1,5 +1,5 @@
 #pragma once
-// Aligned direct-I/O reader for expert slices (P3).
+// Aligned direct-I/O reader for expert slices.
 // Opens with O_DIRECT when the filesystem supports it; falls back to buffered
 // pread otherwise (telemetry: direct()). All reads must be 4096-aligned in
 // offset, length and destination - exactly what soe-prepare + window slices

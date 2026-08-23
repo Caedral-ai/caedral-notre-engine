@@ -1,7 +1,7 @@
 #pragma once
 // Memory regimes R0-R4 and the engine budget formula.
 //
-// Amended budget (P2/P5 notes):
+// Engine budget:
 //   engine_budget = expert_cache + shared_experts + KV + recurrent
 //                 + staging + runtime_base  <=  usable()
 //
@@ -56,7 +56,7 @@ struct MemoryBudget {
     static MemoryBudget detect();
 };
 
-// Regime classification per doc section 14.
+// Regime classification by model-size to available-RAM ratio.
 Regime classify(size_t model_bytes, uint64_t ram_available);
 
 const char *regime_name(Regime r);

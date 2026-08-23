@@ -1,4 +1,4 @@
-// identity-gate: P1 exit gate. Rebinds as many routed-expert tensors as fit
+// identity-gate: streaming correctness harness. Rebinds as many routed-expert tensors as fit
 // in a byte budget into engine-owned 4096-aligned memory (mixed residency:
 // owned + mmap), generates greedily and prints token ids. Run twice
 // (rebind 0 / 1) with identical args and diff the token lines — any

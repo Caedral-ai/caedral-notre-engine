@@ -1,5 +1,5 @@
 #pragma once
-// Lane pool for parallel expert-slice reads (P3). Workers execute caller-
+// Lane pool for parallel expert-slice reads. Workers execute caller-
 // supplied read jobs across N lanes; the calling thread submits a batch and
 // blocks until every job finished. Concurrent preads on a shared fd are safe
 // and build device queue depth; jobs must be independent (SliceCache window

@@ -4,7 +4,8 @@
 // (gguf.cpp: offset[i] == sum of align_up(nbytes, alignment)). Result: every
 // tensor starts at a 4096-aligned absolute offset, tensor bytes are copied
 // verbatim, routed-expert spans do not move relative to their content
-// (E10: slice sizes are already 4096 multiples), and the file stays a normal
+// (expert slice sizes are already 4096 multiples - verified by the alignment
+// census), and the file stays a normal
 // GGUF any loader accepts.
 #include "soe/gguf.h"
 #include "soe/model_registry.h"

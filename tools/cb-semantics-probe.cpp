@@ -127,6 +127,6 @@ int main(int argc, char **argv) {
     bool semantic_a =
         stats.ask_matmul > 0 && stats.ask_with_data == stats.ask_matmul && stats.ask_valid_values == stats.ask_matmul;
     printf("verdict: %s\n", semantic_a ? "SEMANTICS A - demand-serving possible in callback (no fork)"
-                                       : "SEMANTICS B - build-time only; direct kernel patch required (D7 allows)");
+                                       : "SEMANTICS B - build-time only; direct kernel patch required");
     return semantic_a ? 0 : 1;
 }

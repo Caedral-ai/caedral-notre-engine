@@ -1,10 +1,11 @@
 #pragma once
 // Slice-level expert residency cache (the heart of the engine).
 // Unit: (fused tensor, expert id). Storage: one virtual full-size window
-// per fused tensor; slices are filled on demand at their natural offsets,
-// so a single t->data repoint serves any routing (Strategy A).
+// per fused tensor; slices are filled on demand at their natural offsets
+// using the original tensor ids, so a single t->data repoint serves any
+// routing without remapping anything.
 // Physical RAM counts only written pages; eviction returns pages to the OS
-// via madvise(MADV_DONTNEED). Plan ref: cache v1.
+// via madvise(MADV_DONTNEED).
 #include <cstddef>
 #include <cstdint>
 #include <list>
@@ -74,7 +75,7 @@ public:
                           void* dest_window_base, uint64_t src_base_offset,
                           size_t bytes);
 
-    // Background prefetch (P4 overlap): fill absent slices via the given
+    // Background prefetch: fill absent slices via the given
     // scheduler with the cache lock held only for filtering/committing -
     // never during I/O. Safe to race with demand fills from another thread:
     // double-fill is idempotent (same bytes, same destination) and insertion
@@ -120,8 +121,8 @@ private:
     bool touch_locked(uint64_t k, const std::string& tensor, int expert,
                       void* dest, const void* src, uint64_t src_off, size_t bytes);
 
-    // Callbacks arrive on multiple OpenMP worker threads (E13): all
-    // mutations are serialized internally.
+    // Callbacks may arrive on multiple worker threads: all mutations are
+    // serialized internally.
     mutable std::mutex mu_;
 
     CacheLimits limits_;

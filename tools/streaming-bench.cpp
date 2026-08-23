@@ -1,7 +1,8 @@
-// streaming-bench: P2 exit measurement. Full greedy generation with the
-// SliceCache demand-serving slices at the callback ask-point (E12), Strategy-A
-// windows per fused tensor, rebinding on first touch. Reports tok/s,
-// hit-rate, cold MiB/step, evictions — to be compared against lru-sim curves.
+// streaming-bench: end-to-end measurement of demand-served expert streaming.
+// Full greedy generation with SliceCache filling slices at the callback
+// ask-point into full-size windows per fused tensor (original tensor ids kept,
+// rebinding on first touch). Reports tok/s, hit-rate, cold MiB/step,
+// evictions - comparable against offline LRU simulation curves.
 #include "soe/cache.h"
 #include "soe/direct_io.h"
 #include "soe/io_scheduler.h"
@@ -51,7 +52,7 @@ static double g_fill_ns = 0;   // time inside batch fills (I/O + memcpy)
 static uint64_t g_fill_calls = 0;
 static size_t g_use_cap = 0;
 
-// ---- P5: dense residency policies ----------------------------------------
+// ---- Dense residency policies --------------------------------------------
 enum class DensePolicy { MMAP, WARM, ANON };
 static DensePolicy g_dense = DensePolicy::MMAP;
 static std::unordered_map<std::string, void*> g_dense_bind;   // name -> anon copy
@@ -143,7 +144,7 @@ static void read_ids_strided(const ggml_tensor* ids, std::vector<int32_t>& out) 
 
 State g;
 
-// ---- P4 overlap: speculative prefetch (last-token routing reuse) ----------
+// ---- Overlap: speculative prefetch (last-token routing reuse) -------------
 
 enum class PfMode { OFF, FULL, LOOKAHEAD };
 static PfMode g_pf_mode = PfMode::OFF;
@@ -283,7 +284,7 @@ static void note_tid() {
     if (++g_tids[tid] == 1)
         fprintf(stderr, "[bench] callback on NEW tid=%ld\n", tid);
 }
-static bool g_full_fill = false;   // debug: fill whole windows once (E9 style)
+static bool g_full_fill = false;   // debug: fill whole windows once at creation
 
 void ensure_window(const char* name, ggml_tensor* w) {
     if (!g_rebind) return;
@@ -324,13 +325,13 @@ void ensure_window(const char* name, ggml_tensor* w) {
 }
 
 bool cb_eval(ggml_tensor* t, bool ask, void*) {
-    // P4 flow: isolate only ROUTERS (ffn_moe_topk) and MUL_MAT_IDs - 160/step
+    // Flow: isolate only ROUTERS (ffn_moe_topk) and MUL_MAT_IDs - 160/step
     // instead of ~7800. Fresh ids are harvested at the router's ask=false and
     // stashed per layer; MMID asks serve from that stash, so the notorious
     // ids-tensor staleness inside batched regions stops mattering.
     if (!t)
         return true;
-    if (g_anon_scan) {   // P5 ANON policy: one warmup pass observes every node
+    if (g_anon_scan) {   // ANON policy: one warmup pass observes every node
         scan_dense_srcs(t);
         return true;
     }
