@@ -76,16 +76,14 @@ First target — streaming in regime R3 (model ≫ RAM):
 | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | Q8_0 | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | ~34.4 GiB |
 
 ```sh
-./tools/download-model.sh
-# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0.gguf
-
-./build/tools/soe_prepare models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0.gguf
-# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0-prepared.gguf
+./tools/download-q4.sh
+# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.4 GB)
+# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned)
 ```
 
 The prepared file is the runtime artifact: all expert tensors 4096-aligned
-for O_DIRECT, byte-identical weights (token-exact vs upstream file). The
-downloaded original can be deleted once the gate passes.
+for O_DIRECT streaming. The unaligned download can be deleted after the
+gate passes.
 
 Chosen because its Q8 GGUF far exceeds typical desktop RAM while the 3B active
 parameters keep CPU compute tractable — exactly the workload this engine
