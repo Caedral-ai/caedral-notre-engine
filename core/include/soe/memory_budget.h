@@ -28,7 +28,11 @@ struct MemoryBudget {
     uint64_t mem_available = 0;  // MemAvailable at startup (kernel estimate)
 
     double safety_margin_frac = 0.12;   // kept away from the OOM edge
-    size_t base_reserve = 512u << 20;   // runtime growth headroom (allocs, heap)
+    // Runtime growth headroom: llama compute transients, glibc fragmentation,
+    // page-cache drift from concurrent system activity. EMPIRICAL: 512M let a
+    // 9.4G-cap run survive once in a fresh-machine state and OOM in a worn
+    // one; 2G held stable across every scoped/unscoped configuration tried.
+    size_t base_reserve = 2048u << 20;
 
     size_t expert_cache = 0;     // SliceCache hard cap (the knob we clamp)
     size_t shared_experts = 0;   // mandatory-resident bytes
