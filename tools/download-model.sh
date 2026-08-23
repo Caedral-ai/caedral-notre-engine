@@ -18,7 +18,6 @@ DEST_DIR="${1:-$DEFAULT_DEST}"
 FILE_NAME="${2:-$DEFAULT_FILE}"
 URL="https://huggingface.co/${HF_REPO}/resolve/main/${FILE_NAME}"
 TARGET="${DEST_DIR}/${FILE_NAME}"
-PARTIAL="${TARGET}.part"
 
 need_bytes() {
     curl -sIL "$URL" | grep -i '^content-length' | tail -1 | tr -dc '0-9'
@@ -41,10 +40,10 @@ else
     curl -L --fail --retry 5 --retry-delay 5 --continue-at - -o "$TARGET" "$URL"
 fi
 
-if [[ "$FILE_NAME" == "$DEFAULT_FILE" ]]; then
+if [[ -n "$DEFAULT_SHA256" && "$FILE_NAME" == "$DEFAULT_FILE" ]]; then
     echo "verifying sha256..."
     echo "${DEFAULT_SHA256}  ${TARGET}" | sha256sum -c -
-else
+elif [[ -z "$DEFAULT_SHA256" ]]; then
     echo "note: no pinned sha256 for ${FILE_NAME}; skipping verification"
 fi
 
