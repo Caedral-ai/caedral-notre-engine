@@ -76,9 +76,11 @@ First target — streaming in regime R3 (model ≫ RAM):
 | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | Q8_0 | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | ~34.4 GiB |
 
 ```sh
-./tools/download-q4.sh
-# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.4 GB)
-# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned)
+./tools/download-model.sh
+# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf (~22.4 GB)
+
+./build/tools/soe_prepare models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+# → .../Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned, runtime artifact)
 ```
 
 The prepared file is the runtime artifact: all expert tensors 4096-aligned
