@@ -12,7 +12,7 @@ set -euo pipefail
 HF_REPO="${HF_REPO:-unsloth/Qwen3.6-35B-A3B-GGUF}"
 DEFAULT_FILE="Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 DEFAULT_SHA256=""   # pinned after first verified download
-DEFAULT_DEST="models/qwen3.6-35b-a3b-q8_0"
+DEFAULT_DEST="models/qwen3.6-35b-a3b-q4_k_xl"
 
 DEST_DIR="${1:-$DEFAULT_DEST}"
 FILE_NAME="${2:-$DEFAULT_FILE}"

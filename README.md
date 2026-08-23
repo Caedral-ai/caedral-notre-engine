@@ -77,8 +77,8 @@ First target — streaming in regime R3 (model ≫ RAM):
 
 ```sh
 ./tools/download-q4.sh
-# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.4 GB)
-# → models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned)
+# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.4 GB)
+# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned)
 ```
 
 The prepared file is the runtime artifact: all expert tensors 4096-aligned

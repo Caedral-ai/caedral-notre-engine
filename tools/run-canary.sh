@@ -7,7 +7,7 @@
 # usage: run-canary.sh [cap_gib] [n_gen] [ctx]
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-MODEL=${MODEL:-models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0-prepared.gguf}
+MODEL=${MODEL:-models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf}
 CAP=${1:-7}
 GEN=${2:-2048}
 CTX=${3:-2304}

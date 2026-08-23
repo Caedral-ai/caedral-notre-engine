@@ -1,9 +1,17 @@
 # Qwen3.6-35B-A3B — first supported model (reference)
 
-Facts below were observed on the actual artifact, not copied from marketing
-material. Source of truth:
-`models/qwen3.6-35b-a3b-q8_0/Qwen3.6-35B-A3B-Q8_0.gguf` (sha256
-`d1a39580…2794a59`, 36,903,140,320 bytes).
+Facts below were observed on the actual artifacts, not copied from marketing
+material.
+
+Canonical runtime artifact (since 2026-08-23):
+`models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf`
+(unsloth dynamic q4 family, expert tensors 4096-aligned by soe-prepare).
+
+Original observation baseline was the upstream Q8_0 build
+(`Qwen3.6-35B-A3B-Q8_0.gguf`, sha256 `d1a39580…2794a59`,
+36,903,140,320 bytes); architecture facts carry over — quantization is
+per-tensor metadata, and all streaming geometry derives from each loaded
+artifact's own manifest.
 
 ## Identity
 
@@ -11,8 +19,8 @@ material. Source of truth:
 |---|---|
 | HF base model | [`Qwen/Qwen3.6-35B-A3B`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
 | GGUF source | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) |
-| File | `Qwen3.6-35B-A3B-Q8_0.gguf` |
-| Quantization | Q8_0 (canonical, chosen over UD-Q8_K_XL for deterministic identity gates) |
+| File (runtime) | `Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf` |
+| Quantization | unsloth UD-Q4_K_XL dynamic (whole-model q4 family; canonical since the q4 profile pivot) |
 | GGUF architecture key | `qwen35moe` |
 | Params | 34.66 B (llama_model_n_params) |
 | Layers | 40 |
@@ -52,9 +60,9 @@ Per MoE layer (names as stored):
 
 ## Engine decisions bound to this model
 
-- **CPU no-repack**: loaded with `use_extra_bufts = false`. For q8_0 this
-  matches upstream behavior anyway (q8_0 cannot repack; the loader logged a
-  CPU_REPACK fallback to plain CPU).
+- **CPU no-repack**: loaded with `use_extra_bufts = false` (D13). Verified on
+  q8_0 (loader logged a CPU_REPACK fallback to plain CPU); applies to all
+  quants in v1 regardless of type.
 - Expert slices are consumed exactly as stored on disk (original tensor ids,
   full-size buffers).
 - Vision `mmproj` files are out of scope (text-only v1).
