@@ -15,7 +15,9 @@
 
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -143,6 +145,19 @@ static void read_ids_strided(const ggml_tensor* ids, std::vector<int32_t>& out) 
 }
 
 State g;
+
+// ---- L2: conditional expert execution (expert-mass knob) ------------------
+// DEFAULT OFF (lossless full-k). When SOE_EXPERT_MASS is set, routers are
+// harvested WITH their normalized weights; tail experts below the cumulative
+// mass threshold get their probability slots ZEROED in the graph pool before
+// dependent nodes compute - downstream normalization then renormalizes the
+// survivors automatically (AMG-equivalent semantics, zero patches). Skipped
+// experts are never streamed (I/O savings) though their FFNs still execute
+// (static GGML graph).
+static float g_l2_mass = 0.0f;      // 0 = disabled (lossless)
+static int g_l2_min_k = 2;
+static long g_l2_dropped_slices = 0;
+static std::unordered_map<int, std::vector<uint8_t>> g_fresh_keep; // per layer
 
 // ---- Overlap: speculative prefetch (last-token routing reuse) -------------
 
@@ -335,8 +350,9 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         scan_dense_srcs(t);
         return true;
     }
-    const char* nm = t->name ? t->name : "";
-    bool is_router = strstr(nm, "ffn_moe_topk") != nullptr;
+    // Router detection must be STRUCTURAL (top-k op), not name-based:
+    // most graph nodes carry generic pool names ("node_768").
+    bool is_router = t->op == GGML_OP_TOP_K;
     bool is_mmid = t->op == GGML_OP_MUL_MAT_ID;
     if (!is_router && !is_mmid)
         return ask ? false : true;   // batch everything else
@@ -347,14 +363,84 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
     if (is_router) {
         if (ask)
             return true;   // isolate: it computes alone, then we harvest
-        int L = soe::parse_layer_index(nm);
+        int L = soe::parse_layer_index(t->name ? t->name : "");
         if (L < 0 || !t->data || t->type != GGML_TYPE_I32)
             return true;
         std::vector<int32_t> v;
         read_ids_strided(t, v);
         if (v.empty())
             return true;
+
+        std::vector<uint8_t> keep(v.size(), 1);
+        if (g_l2_mass > 0.0f && !g_anon_scan) {
+            // routing weights live in the top-k input (src[0]): softmax
+            // probabilities over all experts, strided like the ids tensor.
+            const ggml_tensor* pr = t->src[0] ? t->src[0] : nullptr;
+            bool l2_ok = pr && pr->type == GGML_TYPE_F32 && pr->data &&
+                         ggml_nelements(pr) >= (int64_t)v.size();
+            if (l2_ok) {
+                const int64_t k = t->ne[0], ntok = t->ne[1];
+                static bool dbg_once = false;
+                for (int64_t col = 0; col < ntok && l2_ok; col++) {
+                    double wsel[4096];
+                    int idx[4096];
+                    double sum = 0.0;
+                    if (!dbg_once && getenv("SOE_L2_DEBUG")) {
+                        dbg_once = true;
+                        fprintf(stderr, "[L2dbg] probs ne=[%lld,%lld] nb=[%lld,%lld] "
+                                        "ids ne=[%lld,%lld]\n",
+                                (long long)pr->ne[0], (long long)pr->ne[1],
+                                (long long)pr->nb[0], (long long)pr->nb[1],
+                                (long long)t->ne[0], (long long)t->ne[1]);
+                    }
+                    for (int64_t j = 0; j < k && j < 4096; j++) {
+                        float p;
+                        memcpy(&p, (const char*)pr->data + col * pr->nb[1] +
+                                       j * pr->nb[0], 4);
+                        int32_t e = v[col * k + j];
+                        idx[j] = (int)j;
+                        wsel[j] = (double)p;
+                        (void)e;
+                        sum += wsel[j];
+                    }
+                    if (sum <= 0) { l2_ok = false; break; }
+                    if (col == 0 && getenv("SOE_L2_DEBUG")) {
+                        fprintf(stderr, "[L2dbg] col0 raw p:");
+                        for (int64_t j = 0; j < k && j < 8; j++)
+                            fprintf(stderr, " %.4f", wsel[j]);
+                        fprintf(stderr, "\n");
+                    }
+                    // ids arrive sorted desc by weight (top-k contract)
+                    double cum = 0.0;
+                    int m = (int)k;
+                    for (int64_t j = 0; j < k; j++) {
+                        cum += wsel[j] / sum;
+                        if (cum >= (double)g_l2_mass) { m = (int)j + 1; break; }
+                    }
+                    if (m < g_l2_min_k) m = g_l2_min_k;
+                    if (m > (int)k) m = (int)k;
+                    for (int64_t j = m; j < k; j++) {
+                        // zero the probability slot: downstream get_rows +
+                        // renormalization reduce the dropped expert to zero
+                        // contribution without touching the static graph.
+                        char* addr = (char*)pr->data + col * pr->nb[1] + j * pr->nb[0];
+                        const float zero = 0.0f;
+                        memcpy(addr, &zero, 4);
+                        keep[col * k + j] = 0;
+                        g_l2_dropped_slices++;
+                    }
+                }
+            } else {
+                static bool warned = false;
+                if (!warned) {
+                    fprintf(stderr, "[L2] could not locate routing weights - "
+                                    "knob inactive this layer\n");
+                    warned = true;
+                }
+            }
+        }
         g_fresh[L] = std::move(v);
+        g_fresh_keep[L] = std::move(keep);
         // opportunistic fill: if this layer's windows already exist (they do
         // from the previous evaluation onward), serve them NOW - off the
         // critical path of anything that matters.
@@ -449,20 +535,89 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         if ((int)v.size() != n) return true;
     }
 
+    // L2: build the keep-mask by walking the ids tensor's ancestry to its
+    // F32 score ancestor (top-k is built as argsort+view, so there is no
+    // TOP_K-op node and names are generic pool names). Dropped experts are
+    // never streamed; their window slices stay zero so their weighted
+    // contribution vanishes (no renormalization - documented deviation).
+    std::vector<uint8_t> keep((size_t)n, 1);
+    bool l2_applied = false;
+    bool ok_scores = true;
+    // EXPERIMENTAL graph-walk discovery: the F32 score ancestor is an
+    // in-place ACC node whose pool aliasing segfaults on some builds.
+    // Gated off by default; the durable path is the D7 expert-ready hook.
+    static bool l2_experimental = getenv("SOE_L2_EXPERIMENTAL") != nullptr;
+    if (g_l2_mass > 0.0f && l2_experimental && ids->src[0]) {
+        const ggml_tensor* sc = ids->src[0];
+        int guard = 0;
+        while (sc && sc->src[0] && sc->type != GGML_TYPE_F32 && guard++ < 8) {
+            fprintf(stderr, "[L2walk] hop %d: op=%d type=%d ne=[%lld,%lld]\n",
+                    guard, (int)sc->op, (int)sc->type,
+                    (long long)sc->ne[0], (long long)sc->ne[1]);
+            sc = sc->src[0];
+        }
+        fprintf(stderr, "[L2walk] stop: op=%d type=%d ne=[%lld,%lld]\n",
+                sc ? (int)sc->op : -1, sc ? (int)sc->type : -1,
+                sc ? (long long)sc->ne[0] : -1LL,
+                sc ? (long long)sc->ne[1] : -1LL);
+        const int n_exp = g.manifest ? g.manifest->n_experts : 0;
+        if (sc && sc->type == GGML_TYPE_F32 && sc->data &&
+            n_exp > 0 && (int64_t)sc->ne[0] == n_exp) {
+            const int64_t k = t->ne[0], ntok = t->ne[1] ? t->ne[1] : 1;
+            for (int64_t c2 = 0; c2 < (int64_t)n; c2++)
+                if (v[c2] < 0 || v[c2] >= n_exp) { ok_scores = false; break; }
+            for (int64_t col = 0; ok_scores && col < ntok; col++) {
+                double wsel[4096];
+                double sum = 0.0;
+                for (int64_t j = 0; j < k && j < 4096; j++) {
+                    float p;
+                    memcpy(&p, (const char*)sc->data +
+                                sc->nb[0] * v[col * k + j] + sc->nb[1] * col, 4);
+                    wsel[j] = (double)p;
+                    sum += wsel[j];
+                }
+                if (sum <= 0) continue;
+                double cum = 0.0;
+                int m = (int)k;
+                for (int64_t j = 0; j < k; j++) {
+                    cum += wsel[j] / sum;
+                    if (cum >= (double)g_l2_mass) { m = (int)j + 1; break; }
+                }
+                if (m < g_l2_min_k) m = g_l2_min_k;
+                if (m > (int)k) m = (int)k;
+                for (int64_t j = m; j < k; j++) {
+                    keep[col * k + j] = 0;
+                    l2_applied = true;
+                }
+            }
+        }
+    }
+    if (l2_applied)
+        g_l2_dropped_slices += (long)(n - (long)std::count(keep.begin(),
+                                                           keep.end(), 1));
+
+    static thread_local std::vector<int32_t> v_kept;
+    v_kept.clear();
+    for (int i = 0; i < n; i++)
+        if (keep[i]) v_kept.push_back(v[i]);
+    if (v_kept.empty()) v_kept = v;
+
     auto t0 = Clock::now();
     if (!g_full_fill) {
         if (g_use_odirect)
-            g.cache->touch_batch_at(w->name, v.data(), n, win.base,
-                                    win.file_off, win.ti->bytes_per_expert);
+            g.cache->touch_batch_at(w->name, v_kept.data(), (int)v_kept.size(),
+                                    win.base, win.file_off,
+                                    win.ti->bytes_per_expert);
         else
-            g.cache->touch_batch(w->name, v.data(), n, win.base, win.orig,
+            g.cache->touch_batch(w->name, v_kept.data(), (int)v_kept.size(),
+                                 win.base, win.orig,
                                  win.ti->bytes_per_expert);
         g_fill_ns += std::chrono::duration<double, std::nano>(Clock::now() - t0).count();
         g_fill_calls++;
     }
     if (g_pf_mode != PfMode::OFF)
-        g_step_ids[g_id_slot][w->name] = v;
-    lookahead_push(w->name);
+        g_step_ids[g_id_slot][w->name] = v_kept;
+    lookahead_push(w->name);   // speculates kept routing only
 
     if (!win.rebound && w->data != win.base) {
         w->data = win.base;
@@ -470,7 +625,7 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         fprintf(stderr, "[bench] rebound %s\n", w->name);
     }
 
-    g_audit[w] = {w->name, v, g.step, win.ti->bytes_per_expert};
+    g_audit[w] = {w->name, v_kept, g.step, win.ti->bytes_per_expert};
     if (getenv("SOE_STEP_FILLS")) {
         char buf2[4096];
         int off = 0;
@@ -578,6 +733,20 @@ int main(int argc, char** argv) {
                : g_dense == DensePolicy::WARM ? "warm" : "mmap");
     }
 
+    // L2 knob: DEFAULT UNSET = lossless full-k. Loud telemetry when active.
+    if (getenv("SOE_EXPERT_MASS")) {
+        g_l2_mass = (float)atof(getenv("SOE_EXPERT_MASS"));
+        g_l2_min_k = getenv("SOE_EXPERT_MIN_K") ? atoi(getenv("SOE_EXPERT_MIN_K")) : 2;
+        if (g_l2_mass <= 0.0f || g_l2_mass > 1.0f) {
+            fprintf(stderr, "[L2] invalid SOE_EXPERT_MASS - knob disabled\n");
+            g_l2_mass = 0.0f;
+        } else {
+            printf("*** [L2] ACTIVE: expert-mass=%.2f min_k=%d "
+                   "(LOSSY profile - quality degradation expected) ***\n",
+                   g_l2_mass, g_l2_min_k);
+        }
+    }
+
     // WARM policy: page in all dense spans before context creation.
     if (g_dense == DensePolicy::WARM) {
         auto t0 = Clock::now();
@@ -628,8 +797,10 @@ int main(int argc, char** argv) {
     g.cache    = &cache;
 
     auto cparams             = llama_context_default_params();
-    cparams.n_ctx            = 256;
-    cparams.n_batch          = cparams.n_ctx;
+    int ctx_size             = getenv("SOE_CTX") ? atoi(getenv("SOE_CTX")) : 256;
+    if (ctx_size < 64) ctx_size = 64;
+    cparams.n_ctx            = ctx_size;
+    cparams.n_batch          = ctx_size < 512 ? ctx_size : 512;
     cparams.n_ubatch         = 64;
     cparams.n_threads        = 8;
     cparams.n_threads_batch  = 8;
@@ -657,6 +828,75 @@ int main(int argc, char** argv) {
     const char* prompt = getenv("SOE_PROMPT") ? getenv("SOE_PROMPT")
                                              : "The capital of France is";
     const auto* vocab  = llama_model_get_vocab(model);
+
+    // ---- PL whole-model PPL mode (policy-aware: L2/anon apply) ----
+    // Chunked CE over a plain-text corpus: windows of ctx tokens, non-
+    // overlapping, memory cleared between windows. This is the canonical
+    // whole-model gate because external llama-perplexity cannot apply our
+    // callback policies (L2 knob etc).
+    if (getenv("SOE_PPL_FILE")) {
+        const char* pf = getenv("SOE_PPL_FILE");
+        std::ifstream cf(pf);
+        if (!cf) { fprintf(stderr, "[ppl] cannot open %s\n", pf); return 1; }
+        std::string text((std::istreambuf_iterator<char>(cf)),
+                         std::istreambuf_iterator<char>());
+        std::vector<llama_token> seq(64);
+        int n_seq = -1;
+        while (n_seq < 0) {
+            if ((size_t)(-n_seq) > seq.size()) seq.resize((size_t)(-n_seq));
+            n_seq = llama_tokenize(vocab, text.c_str(), (int)text.size(),
+                                   seq.data(), (int)seq.size(), true, false);
+            if (n_seq < 0 && (size_t)(-n_seq) == seq.size())
+                seq.resize(seq.size() * 2);
+        }
+        seq.resize(n_seq);
+        const int nv = llama_vocab_n_tokens(vocab);
+        double nll = 0.0; long long ntok = 0;
+        int wins = 0;
+        for (size_t off = 0; off + 1 < (size_t)n_seq; off += (size_t)ctx_size) {
+            const int n = (int)std::min((size_t)ctx_size, (size_t)n_seq - off);
+            if (n < 2) break;
+            llama_batch wb = llama_batch_init(n, 0, 1);
+            for (int i = 0; i < n; i++) {
+                wb.token[i]  = seq[off + i];
+                wb.pos[i]    = (llama_pos)i;
+                wb.n_seq_id[i] = 1;
+                wb.seq_id[i][0] = 0;
+                wb.logits[i] = true;   // need CE at every position
+            }
+            wb.n_tokens = n;
+            if (llama_decode(ctx, wb)) {
+                llama_batch_free(wb);
+                fprintf(stderr, "[ppl] decode failed at offset %zu\n", off);
+                return 1;
+            }
+            llama_batch_free(wb);
+            for (int i = 0; i + 1 < (int)n; i++) {
+                const float* lg = llama_get_logits_ith(ctx, i);
+                float mx = lg[0];
+                for (int v2 = 1; v2 < nv; v2++) mx = std::max(mx, lg[v2]);
+                double lse = mx;
+                double s = 0.0;
+                for (int v2 = 0; v2 < nv; v2++) s += std::exp((double)lg[v2] - mx);
+                lse += std::log(s);
+                nll += lse - (double)lg[seq[off + i + 1]];
+                ntok++;
+            }
+            llama_memory_clear(llama_get_memory(ctx), true);
+            wins++;
+            fprintf(stderr, "[ppl] window %d done (%lld tokens evaluated)\n",
+                    wins, ntok);
+        }
+        double ppl = ntok ? std::exp(nll / (double)ntok) : 0.0;
+        printf("engine-ppl: %.4f (ntok %lld, windows %d, n_ctx %d)\n",
+               ppl, ntok, wins, ctx_size);
+        if (g_l2_mass > 0.0f)
+            printf("[L2] dropped slices total: %ld\n", g_l2_dropped_slices);
+        llama_free(ctx);
+        llama_model_free(model);
+        llama_backend_free();
+        return 0;
+    }
     std::vector<llama_token> toks(32);
     int n_tok = -1;
     // llama_tokenize contract: negative return = required token count.
@@ -685,6 +925,8 @@ int main(int argc, char** argv) {
     auto t0 = Clock::now();
     printf("tokens:");
     int produced = 0;
+    const int dump_every =
+        getenv("SOE_DUMP_LOGITS_EVERY") ? atoi(getenv("SOE_DUMP_LOGITS_EVERY")) : 1;
     auto dump_logits = [&](int tag) {
         const char* ldir = getenv("SOE_DUMP_LOGITS");
         if (!ldir || !*ldir) return;
@@ -707,7 +949,9 @@ int main(int argc, char** argv) {
             fprintf(stderr, "\n[streaming-bench] DECODE FAILED\n");
             return 1;
         }
-        dump_logits(i);   // logits of THIS step's forward (produces token i+1)
+        // stride limits tmpfs use on long canary runs (default: every token)
+        if (!dump_every || (g.step % dump_every) == 0)
+            dump_logits(i);   // logits of THIS step's forward (produces token i+1)
         // FULL-mode overlap: speculate the ENTIRE next step from this step's
         // routing. No-op when the cache already retains the working set;
         // decisive when capacity pressure evicts slices between steps.
@@ -788,6 +1032,9 @@ int main(int argc, char** argv) {
     printf("fill time          : %.2fs (%.1f%% of gen wall) over %llu batch fills\n",
            fill_s, fill_frac, (unsigned long long)g_fill_calls);
     printf("prefetched slices  : %llu\n", (unsigned long long)st.prefetched);
+    if (g_l2_mass > 0.0f)
+        printf("[L2] dropped slices: %ld (mass=%.2f min_k=%d)\n",
+               g_l2_dropped_slices, g_l2_mass, g_l2_min_k);
 
     llama_sampler_free(smpl);
     llama_free(ctx);
