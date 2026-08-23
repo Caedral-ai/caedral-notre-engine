@@ -510,6 +510,12 @@ int main(int argc, char** argv) {
     budget.kv = 64u << 20;         // measured: llama compute buffer + KV/S-state
     budget.staging = 64u << 20;
     budget.runtime_base = 512u << 20;
+    // ANON policy moves dense weights from reclaimable page cache into the
+    // anonymous sum - the cache clamp must shrink by the same amount.
+    if (g_dense == DensePolicy::ANON)
+        for (const auto& ti : manifest.tensors)
+            if (ti.kind != soe::TensorKind::ROUTED_EXPERT)
+                budget.runtime_base += ti.bytes_total;
     size_t requested = cap_gib << 30;
     size_t effective = budget.clamp_cache_cap(requested);
     if (effective != requested)
