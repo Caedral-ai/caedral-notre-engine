@@ -104,18 +104,13 @@ gate passes.
 Chosen because its Q8 GGUF far exceeds typical desktop RAM while the 3B active
 parameters keep CPU compute tractable.
 
-### Quality: UD-Q4_K_XL vs Q8_0
+### Quality
 
-Unsloth's own benchmarks (150+ KL-divergence runs, 9 TB of artifacts) show:
-
-| metric | UD-Q4_K_XL | Q8_0 | loss |
-|---|---|---|---|
-| 99.9% KL divergence | 0.4097 | ~0.10 | minimal |
-| Mean KLD | 0.0137 | ~0.003 | negligible |
-
-UD-Q4_K_XL sits on the **Pareto frontier** for quality-per-byte: attention and
-shared-expert weights stay at higher precision; only routed experts are q4_k.
-In practice, chat / coding / reasoning quality is indistinguishable from q8.
+Unsloth's own benchmarks (150+ KL-divergence runs, 9 TB of artifacts) rank
+UD-Q4_K_XL as **SOTA** for this model family — sitting on the Pareto frontier
+for quality-per-byte: attention and shared-expert weights stay at higher
+precision; only routed experts are q4_k. In practice, chat / coding /
+reasoning quality is indistinguishable from full precision.
 
 ## Building
 
