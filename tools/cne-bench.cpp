@@ -445,8 +445,7 @@ int main(int argc, char** argv) {
                 "[mtp] draft=%.2fs process=%.2fs verify=%.2fs (spec wall %.2fs)\n"
                 "[mtp] per-iteration: draft %.0f ms | verify %.0f ms for %ld "
                 "rows (%.0f ms/row)\n"
-                "[mtp] effective: %.0f ms/token over %d tokens "
-                "(sequential reference ~555 ms at this quant/hardware)\n",
+                "[mtp] effective: %.0f ms/token over %d tokens "\n                "(compare against your sequential arm)\n",
                 stats.draft_s, stats.process_s, stats.verify_s, spec_wall,
                 stats.iterations ? 1000.0 * stats.draft_s / stats.iterations : 0.0,
                 stats.iterations ? 1000.0 * stats.verify_s / stats.iterations : 0.0,
