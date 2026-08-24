@@ -330,10 +330,11 @@ void ensure_window(const char* name, ggml_tensor* w) {
 }
 
 bool cb_eval(ggml_tensor* t, bool ask, void*) {
-    // Flow: isolate only ROUTERS (ffn_moe_topk) and MUL_MAT_IDs - 160/step
-    // instead of ~7800. Fresh ids are harvested at the router's ask=false and
-    // stashed per layer; MMID asks serve from that stash, so the notorious
-    // ids-tensor staleness inside batched regions stops mattering.
+    // Flow: isolate only the MoE routing argsort nodes and the expert
+    // matmuls (MUL_MAT_ID) - 160/step instead of ~7800. At each routing
+    // node's post-compute callback the engine harvests that layer's kept
+    // expert ids and fills the matching window slices; the expert matmul
+    // asks then serve from that stash. Everything else batches normally.
     if (!t)
         return true;
     static long cb_vis = 0;
@@ -357,7 +358,7 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
 
     static std::unordered_map<int, std::vector<int32_t>> g_fresh_kept; // layer -> kept ids
 
-    // ---- ROUTER ----
+    // ---- ROUTER (argsort over all expert probabilities) ----
     if (is_router) {
         if (ask)
             return true;   // isolate: it computes alone, then we harvest
@@ -369,13 +370,14 @@ bool cb_eval(ggml_tensor* t, bool ask, void*) {
         if (v.empty())
             return true;
 
-        // Rank-aware conditional execution (L2): the argsort output holds
-        // ALL experts ranked per token; selection_probs (src[0]) holds their
-        // probabilities. Walk ranks ascending accumulating normalized mass
-        // over the USED ranks; ranks past the threshold are DROPPED - their
-        // expert ids are simply excluded from the fill list, so their window
-        // slices stay zero and contribute nothing (no graph writes needed -
-        // pool aliasing makes callback writes unsafe).
+        // Rank-aware conditional execution (L2 knob): walk the ranked ids
+        // ascending, accumulate normalized probability mass over the USED
+        // experts, drop every rank past SOE_EXPERT_MASS (min floor kept).
+        // Dropped ids are excluded from the fill list so their window slices
+        // stay zero - dropped experts contribute exactly nothing. No writes
+        // into graph-pool memory happen anywhere in this flow: pool slots
+        // are reused across nodes, so callback-side writes corrupt whichever
+        // tensor next occupies the slot.
         const ggml_tensor* probs = t->src[0] ? t->src[0] : nullptr;
         const int64_t n_exp = t->ne[0], ntok = t->ne[1];
         const int64_t used = g.manifest ? (int64_t)g.manifest->n_experts_used : 0;
