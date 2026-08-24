@@ -219,8 +219,14 @@ int main(int argc, char** argv) {
     cparams.n_ctx            = ctx_size;
     cparams.n_batch          = ctx_size < 512 ? ctx_size : 512;
     cparams.n_ubatch         = 64;
-    cparams.n_threads        = 8;
-    cparams.n_threads_batch  = 8;
+    int n_threads = cne::env("THREADS") ? atoi(cne::env("THREADS")) : 8;
+    if (n_threads < 1) n_threads = 1;
+    cparams.n_threads        = n_threads;
+    cparams.n_threads_batch  = n_threads;
+    if (cne::env("KV_Q8")) {
+        cparams.type_k = GGML_TYPE_Q8_0;
+        cparams.type_v = GGML_TYPE_Q8_0;
+    }
     cparams.cb_eval          = cne::stream_cb_eval();
     cparams.cb_eval_user_data = nullptr;
     // MTP speculative decoding (CNE_MTP): 1 = default draft depth, N = depth.
