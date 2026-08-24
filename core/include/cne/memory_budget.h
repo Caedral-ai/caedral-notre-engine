@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <string>
 
-namespace soe {
+namespace cne {
 
 enum class Regime {
     R0_RESIDENT,   // whole model fits comfortably in RAM
@@ -61,4 +61,4 @@ Regime classify(size_t model_bytes, uint64_t ram_available);
 
 const char *regime_name(Regime r);
 
-} // namespace soe
+} // namespace cne

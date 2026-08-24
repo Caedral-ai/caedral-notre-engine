@@ -2,11 +2,11 @@
 // tools/streaming-bench.cpp (R1 / P6a): router-harvest callback, expert
 // windows, slice fills, L2 conditional execution, prefetch overlap,
 // anon-dense binding, audit/dump instrumentation. Single-decode assumption.
-#include "soe_stream_cb.h"
+#include "cne_stream_cb.h"
 
-#include "soe/direct_io.h"
-#include "soe/io_scheduler.h"
-#include "soe/tensor_classify.h"
+#include "cne/direct_io.h"
+#include "cne/io_scheduler.h"
+#include "cne/tensor_classify.h"
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -26,23 +26,23 @@
 #include <unordered_set>
 #include <vector>
 
-namespace soe {
+namespace cne {
 
 struct Window {
     void* base = nullptr;
     void* orig = nullptr;      // original llama mapping (copy source; memcpy mode)
     uint64_t file_off = 0;     // tensor start in backing store (odirect mode)
     bool  rebound = false;
-    const soe::TensorInfo* ti = nullptr;
+    const cne::TensorInfo* ti = nullptr;
 };
 
 namespace {
 
 using Clock2 = std::chrono::steady_clock;
 
-soe::DirectFile g_direct;
+cne::DirectFile g_direct;
 bool g_use_odirect = false;
-std::unique_ptr<soe::IoScheduler> g_sched;
+std::unique_ptr<cne::IoScheduler> g_sched;
 double g_fill_ns = 0;   // time inside batch fills (I/O + memcpy)
 uint64_t g_fill_calls = 0;
 
@@ -74,12 +74,12 @@ void scan_dense_srcs(ggml_tensor* t) {
 }
 
 bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
-    return ((soe::DirectFile*)ud)->read_aligned(dest, bytes, off);
+    return ((cne::DirectFile*)ud)->read_aligned(dest, bytes, off);
 }
 
 struct State {
-    const soe::ModelManifest* manifest = nullptr;
-    soe::SliceCache* cache = nullptr;
+    const cne::ModelManifest* manifest = nullptr;
+    cne::SliceCache* cache = nullptr;
     std::map<std::string, Window> windows;
     long step = -1;
 };
@@ -123,10 +123,10 @@ std::condition_variable g_pi_cv;
 std::deque<PrefetchItem> g_pi_q;      // latest-wins
 bool g_pi_stop = false;
 std::thread g_pi_thread;
-std::unique_ptr<soe::IoScheduler> g_psched;
+std::unique_ptr<cne::IoScheduler> g_psched;
 
 void prefetch_worker() {
-    std::unique_ptr<soe::IoScheduler> psched = std::make_unique<soe::IoScheduler>(4);
+    std::unique_ptr<cne::IoScheduler> psched = std::make_unique<cne::IoScheduler>(4);
     for (;;) {
         PrefetchItem it;
         {
@@ -628,4 +628,4 @@ void stream_check_windows() {
     fprintf(stderr, "[integrity] window check done\n");
 }
 
-} // namespace soe
+} // namespace cne

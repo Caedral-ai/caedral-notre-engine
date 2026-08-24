@@ -6,7 +6,7 @@
 //   fetch missing slices synchronously inside the callback.
 // Semantics B (build-only): ids->data is null/garbage at ask time -> no safe
 //   demand point -> direct kernel patch required.
-#include "soe/model_registry.h"
+#include "cne/model_registry.h"
 
 #include "llama.h"
 
@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <model.gguf>\n", argv[0]);
         return 2;
     }
-    soe::ModelRegistry reg;
-    soe::ModelManifest manifest;
+    cne::ModelRegistry reg;
+    cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
         fprintf(stderr, "[cb-probe] manifest FAILED: %s\n", reg.error().c_str());
         return 1;

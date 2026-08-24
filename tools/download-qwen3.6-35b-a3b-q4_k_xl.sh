@@ -2,7 +2,7 @@
 # download-qwen3.6-35b-a3b-q4_k_xl.sh — fetch + align the canonical runtime artifact.
 #
 # Downloads the unsloth dynamic q4 quant (UD-Q4_K_XL) with MTP layers
-# preserved, then runs soe-prepare to 4096-align all expert tensors for
+# preserved, then runs cne-prepare to 4096-align all expert tensors for
 # O_DIRECT streaming. Resumable; verifies sha256 after download.
 #
 # Usage:
@@ -17,7 +17,7 @@ DEST="$MODEL_DIR/$FILE"
 URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main/$FILE"
 
 # single-instance guard
-LOCK=/tmp/soe_download.lock
+LOCK=/tmp/cne_download.lock
 exec 9>"$LOCK"
 flock -n 9 || { echo "[dl] another instance is already running"; exit 1; }
 
@@ -51,7 +51,7 @@ if [ "$GOT" != "$EXPECTED_SHA256" ]; then
 fi
 echo "[dl] sha256 OK"
 
-echo "[dl] aligning expert tensors (soe-prepare) ..."
-./build/tools/soe_prepare "$DEST"
+echo "[dl] aligning expert tensors (cne-prepare) ..."
+./build/tools/cne_prepare "$DEST"
 
 echo "[dl] done -> ${DEST%.gguf}-prepared.gguf"

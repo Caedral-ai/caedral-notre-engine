@@ -1,13 +1,13 @@
-#include "soe_adapter.h"
+#include "cne_adapter.h"
 
 #include "llama.h"
 
 #include <atomic>
 
-namespace soe::adapter {
+namespace cne::adapter {
 
 const char *llama_version() {
-    // Qualified on purpose: unqualified lookup would find soe::adapter::llama_version.
+    // Qualified on purpose: unqualified lookup would find cne::adapter::llama_version.
     return ::llama_version();
 }
 

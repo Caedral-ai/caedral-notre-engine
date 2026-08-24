@@ -1,7 +1,7 @@
 // Synthetic-GGUF fixture tests for the parser/registry, plus an optional
 // live check against a real model via SOE_TEST_MODEL (skipped when unset).
-#include "soe/gguf.h"
-#include "soe/model_registry.h"
+#include "cne/gguf.h"
+#include "cne/model_registry.h"
 
 #include <cassert>
 #include <cstdio>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-using namespace soe;
+using namespace cne;
 
 namespace {
 
@@ -86,7 +86,7 @@ std::string write_fixture(const std::string &path, bool expert_axis_last = true,
 }
 
 void test_good_fixture() {
-    std::string p = write_fixture("/tmp/opencode/soe_test_good.gguf");
+    std::string p = write_fixture("/tmp/opencode/cne_test_good.gguf");
     ModelRegistry reg;
     ModelManifest m;
     assert(reg.build(p, m));
@@ -115,7 +115,7 @@ void test_good_fixture() {
 }
 
 void test_non_contiguous_flagged_not_fatal() {
-    std::string p = write_fixture("/tmp/opencode/soe_test_nc.gguf", false);
+    std::string p = write_fixture("/tmp/opencode/cne_test_nc.gguf", false);
     ModelRegistry reg;
     ModelManifest m;
     assert(reg.build(p, m));
@@ -130,7 +130,7 @@ void test_non_contiguous_flagged_not_fatal() {
 }
 
 void test_corrupt_magic_fails_closed() {
-    std::string p = write_fixture("/tmp/opencode/soe_test_bad.gguf", true, true);
+    std::string p = write_fixture("/tmp/opencode/cne_test_bad.gguf", true, true);
     ModelRegistry reg;
     ModelManifest m;
     assert(!reg.build(p, m));

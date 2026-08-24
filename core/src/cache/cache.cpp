@@ -1,5 +1,5 @@
-#include "soe/cache.h"
-#include "soe/io_scheduler.h"
+#include "cne/cache.h"
+#include "cne/io_scheduler.h"
 
 #include <sys/mman.h>
 
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace soe {
+namespace cne {
 
 namespace {
 
@@ -276,4 +276,4 @@ size_t SliceCache::touch_batch_at(const std::string& tensor, const int* experts,
     return miss_list.size();
 }
 
-} // namespace soe
+} // namespace cne

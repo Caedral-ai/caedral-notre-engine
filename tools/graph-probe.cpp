@@ -1,8 +1,8 @@
 // graph-probe: capture the tensors llama.cpp actually touches during one
 // decode and reconcile them against the ModelManifest built from the file.
 // Fail-closed seam between "what the file says" and "what inference does".
-#include "soe/model.h"
-#include "soe/model_registry.h"
+#include "cne/model.h"
+#include "cne/model_registry.h"
 
 #include "llama.h"
 
@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    soe::ModelRegistry reg;
-    soe::ModelManifest manifest;
+    cne::ModelRegistry reg;
+    cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
         fprintf(stderr, "[graph-probe] manifest build FAILED: %s\n", reg.error().c_str());
         return 1;
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
     size_t routed_total = 0, routed_seen = 0;
     for (const auto &t : manifest.tensors) {
         manifest_names.insert(t.name);
-        if (t.kind == soe::TensorKind::ROUTED_EXPERT) {
+        if (t.kind == cne::TensorKind::ROUTED_EXPERT) {
             routed_total++;
             if (capture.leaf_names.count(t.name))
                 routed_seen++;

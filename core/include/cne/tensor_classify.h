@@ -1,11 +1,11 @@
 #pragma once
 // Tensor-kind classification. Generic suffix rules cover most architectures;
 // architecture-specific overrides live here (model-specific code is allowed,
-#include "soe/model.h"
+#include "cne/model.h"
 
 #include <string>
 
-namespace soe {
+namespace cne {
 
 TensorKind classify_tensor(const std::string &architecture, const std::string &name);
 

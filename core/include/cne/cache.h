@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <mutex>
 
-namespace soe {
+namespace cne {
 
 class IoScheduler;
 
@@ -143,4 +143,4 @@ private:
     size_t verify_remaining_ = 0;
 };
 
-} // namespace soe
+} // namespace cne

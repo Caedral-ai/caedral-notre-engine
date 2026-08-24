@@ -1,8 +1,8 @@
-#include "soe/io_scheduler.h"
+#include "cne/io_scheduler.h"
 
 #include <cstdio>
 
-namespace soe {
+namespace cne {
 
 IoScheduler::IoScheduler(int lanes) {
     int n = lanes < 1 ? 1 : lanes;
@@ -69,4 +69,4 @@ void IoScheduler::worker_loop() {
     }
 }
 
-} // namespace soe
+} // namespace cne

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace soe {
+namespace cne {
 
 // Coarse functional class of a tensor. Drives residency policy:
 // ROUTED_EXPERT -> expert LRU; everything else -> mandatory-resident set.

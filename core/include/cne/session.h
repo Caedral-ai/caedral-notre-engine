@@ -2,7 +2,7 @@
 // Per-session state. Expert cache is shared per model; KV is session-owned
 #include <cstdint>
 
-namespace soe {
+namespace cne {
 
 class Session {
 public:

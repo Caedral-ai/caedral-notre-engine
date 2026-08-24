@@ -14,7 +14,7 @@
 #include <mutex>
 #include <thread>
 
-namespace soe {
+namespace cne {
 
 class IoScheduler {
 public:
@@ -46,4 +46,4 @@ private:
     std::vector<std::thread> workers_;
 };
 
-} // namespace soe
+} // namespace cne

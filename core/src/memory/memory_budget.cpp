@@ -1,10 +1,10 @@
-#include "soe/memory_budget.h"
+#include "cne/memory_budget.h"
 
 #include <fstream>
 
 #include <sys/sysinfo.h>
 
-namespace soe {
+namespace cne {
 
 namespace {
 
@@ -69,4 +69,4 @@ const char *regime_name(Regime r) {
     return "?";
 }
 
-} // namespace soe
+} // namespace cne

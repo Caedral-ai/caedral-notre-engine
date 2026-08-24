@@ -1,13 +1,13 @@
 // MemoryBudget: headroom math, clamping, regime classification.
-#include "soe/memory_budget.h"
+#include "cne/memory_budget.h"
 
 #include <cassert>
 #include <cstdio>
 
-using soe::classify;
-using soe::MemoryBudget;
-using soe::Regime;
-using soe::regime_name;
+using cne::classify;
+using cne::MemoryBudget;
+using cne::Regime;
+using cne::regime_name;
 
 constexpr size_t G = 1024ull * 1024 * 1024;
 

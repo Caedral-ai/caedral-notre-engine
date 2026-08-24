@@ -2,13 +2,13 @@
 // Aligned direct-I/O reader for expert slices.
 // Opens with O_DIRECT when the filesystem supports it; falls back to buffered
 // pread otherwise (telemetry: direct()). All reads must be 4096-aligned in
-// offset, length and destination - exactly what soe-prepare + window slices
+// offset, length and destination - exactly what cne-prepare + window slices
 // guarantee. Short reads fail closed.
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
-namespace soe {
+namespace cne {
 
 class DirectFile {
 public:
@@ -37,4 +37,4 @@ private:
     bool direct_ = false;
 };
 
-} // namespace soe
+} // namespace cne

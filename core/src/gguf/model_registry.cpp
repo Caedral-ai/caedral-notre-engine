@@ -1,13 +1,13 @@
-#include "soe/model_registry.h"
+#include "cne/model_registry.h"
 
-#include "soe/gguf.h"
-#include "soe/tensor_classify.h"
+#include "cne/gguf.h"
+#include "cne/tensor_classify.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <set>
 
-namespace soe {
+namespace cne {
 
 namespace {
 

@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <string>
 
-namespace soe {
+namespace cne {
 
 struct Config {
     // dense weights policy: "mmap" | "warm" | "anon"

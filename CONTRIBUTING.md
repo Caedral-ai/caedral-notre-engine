@@ -68,12 +68,12 @@ C++17. Formatting is enforced by the checked-in [`.clang-format`](.clang-format)
 - Run `clang-format -i <files>` before committing; formatting-only changes are
   their own commit (`style: ...`).
 - **Naming**
-  - namespaces: `soe` (all product code)
+  - namespaces: `cne` (all product code)
   - types/classes: `PascalCase` (`ExpertKey`, `ModelManifest`)
   - functions/methods: `snake_case`
   - private members: `trailing_underscore_`
   - constants: `kPascalCase` (`kMaxLanes`)
-- Headers: `#pragma once`; public API lives in `core/include/soe/` only.
+- Headers: `#pragma once`; public API lives in `core/include/cne/` only.
 - No exceptions across module boundaries; return error codes / expected-like
   results at seams.
 - Comments explain *why*; English only. Design docs may be PT-BR.

@@ -5,15 +5,15 @@
 // This is the engine's RUNTIME, previously embedded in tools/streaming-bench.
 // All state lives inside stream_cb.cpp under a single-decode assumption;
 // the driver only configures, drives step boundaries, and reads telemetry.
-#include "soe/cache.h"
-#include "soe/model.h"
+#include "cne/cache.h"
+#include "cne/model.h"
 
 #include "llama.h"
 
 #include <cstddef>
 #include <cstdint>
 
-namespace soe {
+namespace cne {
 
 enum class PfMode { OFF, FULL, LOOKAHEAD };
 
@@ -71,4 +71,4 @@ StreamTelemetry stream_telemetry();
 // match the original mapping byte-for-byte. Prints findings to stderr.
 void stream_check_windows();
 
-} // namespace soe
+} // namespace cne

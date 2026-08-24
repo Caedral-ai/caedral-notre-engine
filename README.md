@@ -1,4 +1,4 @@
-# Caedral Notre Engine (soe)
+# Caedral Notre Engine (cne)
 
 **Streaming of Experts engine**: run Mixture-of-Experts models whose GGUF file is
 larger than available RAM, by streaming expert weights from NVMe/flash on demand —
@@ -28,9 +28,9 @@ your model, your data, your machine.
 Client (OpenAI SDK / Open WebUI / n8n)
         │  HTTP/SSE
         ▼
-    soe-server ── auth · quotas · sessions · scheduler
+    cne-server ── auth · quotas · sessions · scheduler
         ▼
-    soe-runtime ── llama.cpp context + router observer
+    cne-runtime ── llama.cpp context + router observer
         ▼                     ▼
   Memory manager         Expert I/O pipeline
   dense/KV/budget        O_DIRECT · N lanes · overlap
@@ -55,11 +55,11 @@ Core principles:
 ## Repository layout
 
 ```
-core/include/soe/   public headers (config, model, cache, io, metrics…)
+core/include/cne/   public headers (config, model, cache, io, metrics…)
 core/src/           implementation: gguf/, moe/, cache/, io/, memory/,
                     runtime/, metrics/
 adapters/           llama.cpp adapter + platform-specific code
-server/             soe-server: HTTP, OpenAI-compatible API, scheduler
+server/             cne-server: HTTP, OpenAI-compatible API, scheduler
 cli/                command-line interface
 tools/              inspection & benchmarking utilities
 tests/              correctness/ gguf/ cache/ io/ memory/ server/

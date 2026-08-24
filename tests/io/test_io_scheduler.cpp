@@ -1,6 +1,6 @@
 // IoScheduler: parallel job execution, completion semantics, failure
 // propagation. Jobs write distinct regions of a scratch buffer.
-#include "soe/io_scheduler.h"
+#include "cne/io_scheduler.h"
 
 #include <atomic>
 #include <cstdio>
@@ -8,7 +8,7 @@
 #include <cstring>
 #include <vector>
 
-using soe::IoScheduler;
+using cne::IoScheduler;
 
 int main() {
     constexpr size_t N = 1000;

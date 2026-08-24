@@ -2,11 +2,11 @@
 // Expert tensor discovery + pre-start validation.
 // Fail closed: stream=1 with an incomplete registry must abort or fall back
 // to mmap — never dereference nulls, never continue silently.
-#include "soe/model.h"
+#include "cne/model.h"
 
 #include <string>
 
-namespace soe {
+namespace cne {
 
 class ModelRegistry {
 public:

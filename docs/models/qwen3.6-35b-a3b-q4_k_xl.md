@@ -34,7 +34,7 @@
 | q8_0 | 260 | embeddings + precision-retained weights |
 
 Prepared variant: io_alignment=4096, all routed slices 4096-aligned,
-types preserved byte-faithfully through soe-prepare.
+types preserved byte-faithfully through cne-prepare.
 
 ## 3. Streaming geometry
 

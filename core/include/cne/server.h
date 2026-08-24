@@ -1,9 +1,9 @@
 #pragma once
-// HTTP/OpenAI-compatible server surface (soe-server). Kept separate from the
+// HTTP/OpenAI-compatible server surface (cne-server). Kept separate from the
 // core runtime: an API layer over an unstable runtime only masks the problem.
-#include "soe/config.h"
+#include "cne/config.h"
 
-namespace soe {
+namespace cne {
 
 // Endpoints (V1):
 //   GET  /v1/models

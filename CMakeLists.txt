@@ -6,13 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(SOE_BUILD_TESTS "Build test suite" ON)
-option(SOE_BUILD_SERVER "Build soe-server" OFF)
+option(SOE_BUILD_SERVER "Build cne-server" OFF)
 option(SOE_BUILD_CLI "Build CLI tools" OFF)
 option(SOE_BUILD_TOOLS "Build developer tools (graph probe)" ON)
 option(SOE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
 
-add_library(soe INTERFACE)
-target_include_directories(soe INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+add_library(cne INTERFACE)
+target_include_directories(cne INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 
 add_subdirectory(core/src)
 
@@ -28,7 +28,7 @@ if(SOE_WITH_LLAMA)
     set(LLAMA_BUILD_UI       OFF)
     # `common` is needed by tools that wire upstream speculative decoding
     # (common_speculative draft-mtp). Library-only discipline for the product
-    # core is unchanged: soe_core/soe_adapter never link it.
+    # core is unchanged: cne_core/cne_adapter never link it.
     set(LLAMA_BUILD_COMMON   ON)
     add_subdirectory(third_party/llama.cpp)
     add_subdirectory(adapters)

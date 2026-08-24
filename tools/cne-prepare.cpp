@@ -1,4 +1,4 @@
-// soe-prepare: one-time GGUF normalization for the O_DIRECT path.
+// cne-prepare: one-time GGUF normalization for the O_DIRECT path.
 // Strategy: bump general.alignment to 4096 and repack offsets cumulatively in
 // directory order - exactly the packing rule upstream llama.cpp enforces
 // (gguf.cpp: offset[i] == sum of align_up(nbytes, alignment)). Result: every
@@ -7,8 +7,8 @@
 // (expert slice sizes are already 4096 multiples - verified by the alignment
 // census), and the file stays a normal
 // GGUF any loader accepts.
-#include "soe/gguf.h"
-#include "soe/model_registry.h"
+#include "cne/gguf.h"
+#include "cne/model_registry.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -43,16 +43,16 @@ int main(int argc, char **argv) {
     const std::string in_path = argv[1];
     const std::string out_path = argc > 2 ? argv[2] : default_out(in_path);
 
-    soe::ModelRegistry reg;
-    soe::ModelManifest m;
+    cne::ModelRegistry reg;
+    cne::ModelManifest m;
     if (!reg.build(in_path, m)) {
-        fprintf(stderr, "soe-prepare: manifest failed: %s\n", reg.error().c_str());
+        fprintf(stderr, "cne-prepare: manifest failed: %s\n", reg.error().c_str());
         return 1;
     }
 
-    soe::GgufReader rd;
+    cne::GgufReader rd;
     if (!rd.open(in_path)) {
-        fprintf(stderr, "soe-prepare: %s\n", rd.error().c_str());
+        fprintf(stderr, "cne-prepare: %s\n", rd.error().c_str());
         return 1;
     }
     const uint64_t meta_end = rd.meta_end();
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     // Spans from sorted layout (same rule as the registry: next offset delta,
     // last tensor runs to end of file). Original spans are align_up(nbytes,
     // old_alignment); aligning those to 4096 == align_up(nbytes, 4096).
-    std::vector<const soe::GgufReader::RawTensor *> sorted;
+    std::vector<const cne::GgufReader::RawTensor *> sorted;
     for (const auto &t : rd.raw_tensors())
         sorted.push_back(&t);
     std::sort(sorted.begin(), sorted.end(),
@@ -77,10 +77,10 @@ int main(int argc, char **argv) {
     // packing upstream enforces could not be satisfied. Fail closed otherwise.
     const size_t n = rd.raw_tensors().size();
     if (sorted.size() != n)
-        return fprintf(stderr, "soe-prepare: internal tensor count mismatch\n"), 1;
+        return fprintf(stderr, "cne-prepare: internal tensor count mismatch\n"), 1;
     for (size_t i = 0; i < n; i++)
         if (sorted[i] != &rd.raw_tensors()[i])
-            return fprintf(stderr, "soe-prepare: tensor dir not sorted by offset "
+            return fprintf(stderr, "cne-prepare: tensor dir not sorted by offset "
                                     "(entry %zu: %s) - cannot repack safely\n",
                            i, rd.raw_tensors()[i].name.c_str()), 1;
 
@@ -97,12 +97,12 @@ int main(int argc, char **argv) {
     // field.
     std::FILE *src = std::fopen(in_path.c_str(), "rb");
     if (!src) {
-        fprintf(stderr, "soe-prepare: cannot open %s\n", in_path.c_str());
+        fprintf(stderr, "cne-prepare: cannot open %s\n", in_path.c_str());
         return 1;
     }
     std::vector<char> meta((size_t)meta_end);
     if (std::fread(meta.data(), 1, meta.size(), src) != meta.size()) {
-        fprintf(stderr, "soe-prepare: short metadata read\n");
+        fprintf(stderr, "cne-prepare: short metadata read\n");
         return 1;
     }
     uint64_t kv_shift = 0;
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     const uint64_t new_data_off = align_up((uint64_t)meta.size(), kAlign);
     const uint64_t new_file_size = new_data_off + cursor;
     if (new_file_size < m.file_size)
-        return fprintf(stderr, "soe-prepare: new layout smaller than source (%llu < %llu) - refusing\n",
+        return fprintf(stderr, "cne-prepare: new layout smaller than source (%llu < %llu) - refusing\n",
                        (unsigned long long)new_file_size, (unsigned long long)m.file_size), 1;
 
     const std::filesystem::path out_fs(out_path);
@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
             dir = ".";
         auto st = std::filesystem::space(dir);
         if (st.available < new_file_size) {
-            fprintf(stderr, "soe-prepare: not enough disk space for %s (%.1f GiB needed, %.1f free)\n",
+            fprintf(stderr, "cne-prepare: not enough disk space for %s (%.1f GiB needed, %.1f free)\n",
                     out_path.c_str(), new_file_size / 1073741824.0,
                     (double)st.available / 1073741824.0);
             return 1;
@@ -164,15 +164,15 @@ int main(int argc, char **argv) {
 
     std::FILE *dst = std::fopen(out_path.c_str(), "wb");
     if (!dst) {
-        fprintf(stderr, "soe-prepare: cannot create %s\n", out_path.c_str());
+        fprintf(stderr, "cne-prepare: cannot create %s\n", out_path.c_str());
         return 1;
     }
     if (std::fwrite(meta.data(), 1, meta.size(), dst) != meta.size()) {
-        fprintf(stderr, "soe-prepare: metadata write failed\n");
+        fprintf(stderr, "cne-prepare: metadata write failed\n");
         return 1;
     }
     if (fseeko(dst, (off_t)new_data_off, SEEK_SET) != 0) {
-        fprintf(stderr, "soe-prepare: seek to data section failed\n");
+        fprintf(stderr, "cne-prepare: seek to data section failed\n");
         return 1;
     }
 
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
         const uint64_t dst_abs = new_data_off + new_rel[i];
         if (fseeko(dst, (off_t)dst_abs, SEEK_SET) != 0 ||
             fseeko(src, (off_t)src_abs, SEEK_SET) != 0) {
-            fprintf(stderr, "soe-prepare: seek failed at tensor %zu\n", i);
+            fprintf(stderr, "cne-prepare: seek failed at tensor %zu\n", i);
             return 1;
         }
         uint64_t left = span[i];
@@ -191,14 +191,14 @@ int main(int argc, char **argv) {
             size_t chunk = (size_t)(left < buf.size() ? left : buf.size());
             if (std::fread(buf.data(), 1, chunk, src) != chunk ||
                 std::fwrite(buf.data(), 1, chunk, dst) != chunk) {
-                fprintf(stderr, "soe-prepare: copy failure in tensor %s\n",
+                fprintf(stderr, "cne-prepare: copy failure in tensor %s\n",
                         sorted[i]->name.c_str());
                 return 1;
             }
             left -= chunk;
             copied += chunk;
             if (copied >= next_report) {
-                printf("soe-prepare: %.1f / %.1f GiB (%d%%)\n", copied / 1073741824.0,
+                printf("cne-prepare: %.1f / %.1f GiB (%d%%)\n", copied / 1073741824.0,
                        m.file_size / 1073741824.0, (int)(100 * copied / m.file_size));
                 fflush(stdout);
                 next_report += 4ull << 30;
@@ -206,7 +206,7 @@ int main(int argc, char **argv) {
         }
     }
     if (std::fflush(dst) != 0 || fsync(fileno(dst)) != 0) {
-        fprintf(stderr, "soe-prepare: flush/fsync failed\n");
+        fprintf(stderr, "cne-prepare: flush/fsync failed\n");
         return 1;
     }
     std::fclose(dst);
@@ -214,10 +214,10 @@ int main(int argc, char **argv) {
 
     // Validation: registry on the prepared file must report every routed
     // slice O_DIRECT-aligned, same counts as the source.
-    soe::ModelRegistry vreg;
-    soe::ModelManifest vm;
+    cne::ModelRegistry vreg;
+    cne::ModelManifest vm;
     if (!vreg.build(out_path, vm)) {
-        fprintf(stderr, "soe-prepare: VALIDATION FAILED: %s\n", vreg.error().c_str());
+        fprintf(stderr, "cne-prepare: VALIDATION FAILED: %s\n", vreg.error().c_str());
         return 1;
     }
     bool ok = vm.routed_expert_tensors == m.routed_expert_tensors &&
@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
               vm.scattered_alignment == 0 &&
               vm.all_slices_aligned == vm.routed_expert_tensors &&
               vm.io_alignment == kAlign;
-    printf("soe-prepare: wrote %s (%.2f GiB)\n", out_path.c_str(),
+    printf("cne-prepare: wrote %s (%.2f GiB)\n", out_path.c_str(),
            new_file_size / 1073741824.0);
     printf("validation: io_alignment=%zu routed=%zu all_aligned=%zu misaligned=%zu uniform=%zu scattered=%zu -> %s\n",
            vm.io_alignment, vm.routed_expert_tensors, vm.all_slices_aligned,

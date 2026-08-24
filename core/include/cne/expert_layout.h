@@ -2,7 +2,7 @@
 // Expert slice addressing within fused GGUF tensors.
 #include <cstdint>
 
-namespace soe {
+namespace cne {
 
 struct ExpertKey {
     int layer;

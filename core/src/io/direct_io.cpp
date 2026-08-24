@@ -1,4 +1,4 @@
-#include "soe/direct_io.h"
+#include "cne/direct_io.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace soe {
+namespace cne {
 
 namespace {
 constexpr size_t kAlign = 4096;
@@ -75,4 +75,4 @@ bool DirectFile::read_aligned(void *dest, size_t bytes, uint64_t offset) const {
     return true;
 }
 
-} // namespace soe
+} // namespace cne

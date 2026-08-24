@@ -3,7 +3,7 @@
 // Decision metrics are end-to-end tok/s and p95 inter-token latency.
 #include <cstdint>
 
-namespace soe {
+namespace cne {
 
 struct Metrics {
     double tok_s_decode = 0;

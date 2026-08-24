@@ -3,14 +3,14 @@
 // Reads header + KV + tensor directory; never touches tensor data.
 // Expert byte spans are derived from file layout (offset deltas), so no
 // quant-type size tables are embedded here (metadata-driven).
-#include "soe/model.h"
+#include "cne/model.h"
 
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
-namespace soe {
+namespace cne {
 
 class GgufReader {
 public:

@@ -1,9 +1,9 @@
-#include "soe/tensor_classify.h"
+#include "cne/tensor_classify.h"
 
 #include <cstdlib>
 #include <cstring>
 
-namespace soe {
+namespace cne {
 
 namespace {
 

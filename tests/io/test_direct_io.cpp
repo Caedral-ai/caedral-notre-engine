@@ -1,8 +1,8 @@
 // DirectFile: aligned reads on a temp file (O_DIRECT when the filesystem
 // supports it, buffered fallback otherwise); misaligned calls rejected;
 // short reads fail closed. SliceCache backend mode: fills via Source.
-#include "soe/cache.h"
-#include "soe/direct_io.h"
+#include "cne/cache.h"
+#include "cne/direct_io.h"
 
 #include <sys/mman.h>
 
@@ -13,14 +13,14 @@
 #include <cstring>
 #include <string>
 
-using soe::CacheLimits;
-using soe::DirectFile;
-using soe::SliceCache;
+using cne::CacheLimits;
+using cne::DirectFile;
+using cne::SliceCache;
 
 namespace {
 constexpr size_t B = 4096;
 
-std::string tmp_path() { return "soe_test_direct_io.tmp"; }
+std::string tmp_path() { return "cne_test_direct_io.tmp"; }
 
 bool write_pattern(const std::string &path, size_t blocks) {
     std::FILE *f = std::fopen(path.c_str(), "wb");

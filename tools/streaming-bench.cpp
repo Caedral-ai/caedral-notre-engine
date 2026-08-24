@@ -4,14 +4,14 @@
 // against offline LRU simulation curves.
 //
 // R1: the demand-serving RUNTIME lives in adapters/stream_cb.cpp behind the
-// soe_stream_cb.h API; this file is only a measurement driver.
-#include "soe/cache.h"
-#include "soe/io_scheduler.h"
-#include "soe/memory_budget.h"
-#include "soe/model.h"
-#include "soe/model_registry.h"
+// cne_stream_cb.h API; this file is only a measurement driver.
+#include "cne/cache.h"
+#include "cne/io_scheduler.h"
+#include "cne/memory_budget.h"
+#include "cne/model.h"
+#include "cne/model_registry.h"
 
-#include "soe_stream_cb.h"
+#include "cne_stream_cb.h"
 
 #include "llama.h"
 
@@ -72,8 +72,8 @@ int main(int argc, char** argv) {
     size_t verify_n = argc > 4 ? (size_t)atoll(argv[4]) : 64;
     bool rebind     = argc > 5 ? atoi(argv[5]) != 0 : true;
 
-    soe::ModelRegistry reg;
-    soe::ModelManifest manifest;
+    cne::ModelRegistry reg;
+    cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
         fprintf(stderr, "[streaming-bench] manifest FAILED: %s\n", reg.error().c_str());
         return 1;
@@ -86,17 +86,17 @@ int main(int argc, char** argv) {
     {
         const char* dp = getenv("SOE_DENSE");
         std::string s = dp ? dp : "";
-        soe::MemoryBudget pre = soe::MemoryBudget::detect();
+        cne::MemoryBudget pre = cne::MemoryBudget::detect();
         uint64_t dense_bytes = 0;
         for (const auto& ti : manifest.tensors)
-            if (ti.kind != soe::TensorKind::ROUTED_EXPERT)
+            if (ti.kind != cne::TensorKind::ROUTED_EXPERT)
                 dense_bytes += ti.bytes_total;
-        soe::Regime rg = soe::classify((size_t)manifest.file_size, pre.mem_available);
+        cne::Regime rg = cne::classify((size_t)manifest.file_size, pre.mem_available);
         printf("regime=%s (available %.1f GiB, dense %.2f GiB)\n",
-               soe::regime_name(rg), pre.mem_available / 1073741824.0,
+               cne::regime_name(rg), pre.mem_available / 1073741824.0,
                dense_bytes / 1073741824.0);
         if (s.empty())
-            g_dense = (rg != soe::Regime::R0_RESIDENT &&
+            g_dense = (rg != cne::Regime::R0_RESIDENT &&
                        pre.mem_available > dense_bytes * 2)
                           ? DensePolicy::ANON
                           : DensePolicy::MMAP;
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 
     // Budget manager: clamp the cache cap to what this machine can hold.
     // The 12G-cap OOM experiment is impossible by construction now.
-    soe::MemoryBudget budget = soe::MemoryBudget::detect();
+    cne::MemoryBudget budget = cne::MemoryBudget::detect();
     budget.kv = 64u << 20;         // measured: llama compute buffer + KV/S-state
     budget.staging = 64u << 20;
     budget.runtime_base = 512u << 20;
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
     // anonymous sum - the cache clamp must shrink by the same amount.
     if (g_dense == DensePolicy::ANON)
         for (const auto& ti : manifest.tensors)
-            if (ti.kind != soe::TensorKind::ROUTED_EXPERT)
+            if (ti.kind != cne::TensorKind::ROUTED_EXPERT)
                 budget.runtime_base += ti.bytes_total;
     size_t requested = cap_gib << 30;
     size_t effective = budget.clamp_cache_cap(requested);
@@ -127,11 +127,11 @@ int main(int argc, char** argv) {
                 (size_t)cap_gib, effective >> 30,
                 budget.mem_available / 1073741824.0);
     {
-        auto regime = soe::classify((size_t)manifest.file_size, budget.mem_available);
+        auto regime = cne::classify((size_t)manifest.file_size, budget.mem_available);
         printf("budget: available=%.1f GiB model=%.1f GiB regime=%s cap=%zu MiB\n",
                budget.mem_available / 1073741824.0,
                manifest.file_size / 1073741824.0,
-               soe::regime_name(regime), effective >> 20);
+               cne::regime_name(regime), effective >> 20);
     }
 
     // L2 knob: DEFAULT UNSET = lossless full-k. Loud telemetry when active.
@@ -152,32 +152,32 @@ int main(int argc, char** argv) {
 
     // Prefetch overlap: measured-dead on this hardware/model (P4a/P5d);
     // kept flag-gated for future capacity-pressure regimes.
-    soe::PfMode pf_mode = soe::PfMode::OFF;
+    cne::PfMode pf_mode = cne::PfMode::OFF;
     {
         const char* pf = getenv("SOE_PREFETCH");
         std::string pfs = pf ? pf : "";
         if (pfs == "1" || pfs == "lookahead")
-            pf_mode = soe::PfMode::LOOKAHEAD;
+            pf_mode = cne::PfMode::LOOKAHEAD;
         else if (pfs == "full")
-            pf_mode = soe::PfMode::FULL;
+            pf_mode = cne::PfMode::FULL;
     }
 
-    soe::SliceCache cache(soe::CacheLimits{effective});
+    cne::SliceCache cache(cne::CacheLimits{effective});
     cache.set_verify_next(verify_n);
 
     // Runtime wiring: callback machinery + fill backend.
-    soe::StreamConfig cfg;
+    cne::StreamConfig cfg;
     cfg.rebind     = rebind;
     cfg.full_fill  = getenv("SOE_FULL_FILL") != nullptr;
     cfg.step_fills = getenv("SOE_STEP_FILLS") != nullptr;
     cfg.l2_mass    = l2_mass;
     cfg.l2_min_k   = l2_min_k;
     cfg.pf_mode    = pf_mode;
-    soe::stream_init(manifest, cache, cfg);
+    cne::stream_init(manifest, cache, cfg);
 
-    bool use_odirect = soe::stream_open_fill_backend(argv[1],
+    bool use_odirect = cne::stream_open_fill_backend(argv[1],
                          getenv("SOE_LANES") ? atoi(getenv("SOE_LANES")) : 4);
-    soe::stream_prefetch_start();
+    cne::stream_prefetch_start();
 
     // WARM policy: page in all dense spans before context creation.
     if (g_dense == DensePolicy::WARM) {
@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
         char wbuf[1 << 20];
         size_t warmed = 0;
         for (const auto& ti : manifest.tensors) {
-            if (ti.kind == soe::TensorKind::ROUTED_EXPERT) continue;
+            if (ti.kind == cne::TensorKind::ROUTED_EXPERT) continue;
             if (fseeko(f, (off_t)ti.abs_offset, SEEK_SET) != 0) continue;
             uint64_t left = ti.bytes_total;
             while (left) {
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
     cparams.n_ubatch         = 64;
     cparams.n_threads        = 8;
     cparams.n_threads_batch  = 8;
-    cparams.cb_eval          = soe::stream_cb_eval();
+    cparams.cb_eval          = cne::stream_cb_eval();
     cparams.cb_eval_user_data = nullptr;
     // MTP speculative decoding (SOE_MTP): 1 = default draft depth, N = depth.
     // The target context stays LLAMA_CONTEXT_TYPE_DEFAULT - the MTP context
@@ -248,16 +248,16 @@ int main(int argc, char** argv) {
     // ANON policy: one scan decode binds every dense weight to anon memory,
     // then memory is cleared so generation state is pristine.
     if (g_dense == DensePolicy::ANON) {
-        soe::stream_anon_scan_begin();
+        cne::stream_anon_scan_begin();
         llama_token b = llama_vocab_bos(llama_model_get_vocab(model));
         llama_batch wb = llama_batch_get_one(&b, 1);
         if (llama_decode(ctx, wb))
             fprintf(stderr, "[dense] anon scan decode failed (continuing)\n");
-        soe::stream_anon_scan_end();
+        cne::stream_anon_scan_end();
         llama_memory_clear(llama_get_memory(ctx), true);
         printf("dense=anon: %zu tensors bound, %zu MiB anonymous\n",
-               soe::stream_dense_bound_count(),
-               soe::stream_dense_anon_bytes() >> 20);
+               cne::stream_dense_bound_count(),
+               cne::stream_dense_anon_bytes() >> 20);
     }
 
     const char* prompt = getenv("SOE_PROMPT") ? getenv("SOE_PROMPT")
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
                ppl, ntok, wins, ctx_size);
         if (l2_mass > 0.0f)
             printf("[L2] dropped slices total: %ld\n",
-                   soe::stream_telemetry().l2_dropped);
+                   cne::stream_telemetry().l2_dropped);
         llama_free(ctx);
         llama_model_free(model);
         llama_backend_free();
@@ -399,7 +399,7 @@ int main(int argc, char** argv) {
         fflush(stdout);
         produced++;
         fprintf(stderr, "[bench] step %d\n", i);
-        soe::stream_set_step(i);
+        cne::stream_set_step(i);
         if (llama_decode(ctx, llama_batch_get_one(&id, 1))) {
             fprintf(stderr, "\n[streaming-bench] DECODE FAILED\n");
             return 1;
@@ -407,8 +407,8 @@ int main(int argc, char** argv) {
         // stride limits tmpfs use on long canary runs (default: every token)
         if (!dump_every || ((long)i % dump_every) == 0)
             dump_logits(i);   // logits of THIS step's forward (produces token i+1)
-        soe::stream_prefetch_kick_full();
-        soe::stream_step_boundary();
+        cne::stream_prefetch_kick_full();
+        cne::stream_step_boundary();
     }
 
     // ---- MTP speculative decoding path (draft-mtp, greedy) ----
@@ -422,7 +422,7 @@ int main(int argc, char** argv) {
         spec_params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
         spec_params.speculative.draft.n_max = mtp_k;
         spec_params.sampling.temp = 0.0f;   // greedy acceptance
-        spec_params.cb_eval = soe::stream_cb_eval();  // demand-serving in draft too
+        spec_params.cb_eval = cne::stream_cb_eval();  // demand-serving in draft too
         // D13 consistency: both contexts must see the SAME weight buffers.
         spec_params.no_extra_bufts = true;
 
@@ -558,7 +558,7 @@ int main(int argc, char** argv) {
             for (size_t i2 = 0; i2 < ids.size(); ++i2) {
                 prompt_tgt.push_back(id_last);
                 id_last = ids[i2];
-                soe::stream_set_step(step++);
+                cne::stream_set_step(step++);
                 if (llama_vocab_is_eog(vocab, id_last)) { stop = true; break; }
                 printf(" %d", id_last);
                 fflush(stdout);
@@ -579,7 +579,7 @@ int main(int argc, char** argv) {
                 mtp_drafted ? 100.0 * mtp_accepted / mtp_drafted : 0.0);
     }
 
-    soe::stream_prefetch_stop();
+    cne::stream_prefetch_stop();
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
     MemSnap snap1 = mem_snap();
     printf("\n[mem] minflt+%ld majflt+%ld rss=%.2f GiB hwm=%.2f GiB\n",
@@ -589,9 +589,9 @@ int main(int argc, char** argv) {
     auto st = cache.stats();
     uint64_t gen_misses = st.misses - misses_before;
 
-    soe::stream_check_windows();
+    cne::stream_check_windows();
     double hit = st.hits + st.misses ? 100.0 * st.hits / (st.hits + st.misses) : 0;
-    auto tel = soe::stream_telemetry();
+    auto tel = cne::stream_telemetry();
     printf("=== streaming-bench summary ===\n");
     printf("tok/s              : %.2f\n", produced / secs);
     printf("produced           : %d in %.1fs\n", produced, secs);

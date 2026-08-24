@@ -8,8 +8,8 @@
 //   #T <fused-name> <slice_bytes>        header, one per routed tensor
 //   #M <shared_bytes> <dense_other_bytes>
 //   S <step> <fused-name> <id,id,...>    one line per touch
-#include "soe/model.h"
-#include "soe/model_registry.h"
+#include "cne/model.h"
+#include "cne/model_registry.h"
 
 #include "llama.h"
 
@@ -27,8 +27,8 @@ FILE *g_trace = nullptr;
 long g_step = 0;
 
 struct Capture {
-    const soe::ModelManifest *manifest = nullptr;
-    std::map<std::string, const soe::TensorInfo *> routed;
+    const cne::ModelManifest *manifest = nullptr;
+    std::map<std::string, const cne::TensorInfo *> routed;
     std::set<std::string> shared_names;
     std::set<std::string> shared_seen_step;
     long steps_all_shared_seen = 0;
@@ -86,8 +86,8 @@ int main(int argc, char **argv) {
     }
     int n_gen = argc > 3 ? atoi(argv[3]) : 96;
 
-    soe::ModelRegistry reg;
-    soe::ModelManifest manifest;
+    cne::ModelRegistry reg;
+    cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
         fprintf(stderr, "[touch-recorder] manifest FAILED: %s\n", reg.error().c_str());
         return 1;
@@ -102,13 +102,13 @@ int main(int argc, char **argv) {
     g_cap.manifest = &manifest;
     size_t shared_bytes = 0, dense_other_bytes = 0;
     for (const auto &ti : manifest.tensors) {
-        if (ti.kind == soe::TensorKind::ROUTED_EXPERT) {
+        if (ti.kind == cne::TensorKind::ROUTED_EXPERT) {
             g_cap.routed[ti.name] = &ti;
             fprintf(out, "#T %s %llu\n", ti.name.c_str(), (unsigned long long)ti.bytes_per_expert);
-        } else if (ti.kind == soe::TensorKind::SHARED_EXPERT) {
+        } else if (ti.kind == cne::TensorKind::SHARED_EXPERT) {
             g_cap.shared_names.insert(ti.name);
             shared_bytes += ti.bytes_total;
-        } else if (ti.kind != soe::TensorKind::SCALE) {
+        } else if (ti.kind != cne::TensorKind::SCALE) {
             dense_other_bytes += ti.bytes_total;
         }
     }

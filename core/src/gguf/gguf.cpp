@@ -1,10 +1,10 @@
-#include "soe/gguf.h"
+#include "cne/gguf.h"
 
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
 
-namespace soe {
+namespace cne {
 
 namespace {
 

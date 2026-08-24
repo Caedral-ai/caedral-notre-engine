@@ -1,6 +1,6 @@
 // SliceCache unit tests: LRU order, recency refresh, dedupe, cap enforcement,
 // madvise eviction path on real anonymous memory.
-#include "soe/cache.h"
+#include "cne/cache.h"
 
 #include <sys/mman.h>
 
@@ -10,8 +10,8 @@
 #include <cstring>
 #include <string>
 
-using soe::CacheLimits;
-using soe::SliceCache;
+using cne::CacheLimits;
+using cne::SliceCache;
 
 namespace {
 

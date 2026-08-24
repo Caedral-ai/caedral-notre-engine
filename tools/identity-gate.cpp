@@ -3,9 +3,9 @@
 // owned + mmap), generates greedily and prints token ids. Run twice
 // (rebind 0 / 1) with identical args and diff the token lines — any
 // difference means the streaming path changed the math. FAIL.
-#include "soe/model.h"
-#include "soe/model_registry.h"
-#include "soe/tensor_classify.h"
+#include "cne/model.h"
+#include "cne/model_registry.h"
+#include "cne/tensor_classify.h"
 
 #include "llama.h"
 
@@ -20,7 +20,7 @@
 namespace {
 
 struct Capture {
-    const soe::ModelManifest *manifest = nullptr;
+    const cne::ModelManifest *manifest = nullptr;
     std::map<std::string, ggml_tensor *> routed; // name -> tensor (first hit)
 };
 
@@ -37,7 +37,7 @@ bool cb_eval(struct ggml_tensor *t, bool ask, void *user_data) {
         if (c->routed.count(s->name))
             continue;
         for (const auto &ti : c->manifest->tensors)
-            if (ti.name == s->name && ti.kind == soe::TensorKind::ROUTED_EXPERT) {
+            if (ti.name == s->name && ti.kind == cne::TensorKind::ROUTED_EXPERT) {
                 c->routed[s->name] = s;
                 break;
             }
@@ -56,8 +56,8 @@ int main(int argc, char **argv) {
     const bool rebind = argc > 3 ? std::atoi(argv[3]) != 0 : true;
     const int n_gen = argc > 4 ? std::atoi(argv[4]) : 48;
 
-    soe::ModelRegistry reg;
-    soe::ModelManifest manifest;
+    cne::ModelRegistry reg;
+    cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
         fprintf(stderr, "[identity-gate] manifest FAILED: %s\n", reg.error().c_str());
         return 1;
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
         // Rebind in layer order until budget exhausted (deterministic subset).
         std::vector<std::pair<int, ggml_tensor *>> order;
         for (auto &[name, t] : capture.routed)
-            order.push_back({soe::parse_layer_index(name), t});
+            order.push_back({cne::parse_layer_index(name), t});
         std::sort(order.begin(), order.end(), [](auto &a, auto &b) { return a.first < b.first; });
         for (auto &[layer, t] : order) {
             size_t nbytes = ggml_nbytes(t);
