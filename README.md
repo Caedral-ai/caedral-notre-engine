@@ -67,6 +67,13 @@ third_party/        llama.cpp (upstream submodule)
 ```
 
 
+## When streaming helps
+
+The engine delivers meaningful speedup only when the model is **at least 2×
+the available RAM** (regime R3). Below that threshold, plain mmap inference
+performs equally well or better because the OS page cache already does the
+job. The regime classifier reports which situation you are in at load time.
+
 ## Supported models
 
 First target — streaming in regime R3 (model ≫ RAM):
