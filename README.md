@@ -1,14 +1,29 @@
-# Caedral Notre Engine (cne)
+<div align="center">
 
-**A MoE inference engine for low-RAM, CPU-only machines.** Run
-Mixture-of-Experts models that don't fit in RAM by letting the engine choose
-and combine the right optimizations for your hardware and model — with
-explicit memory budgets, predictable behavior, and lossless output by
-default.
+<img src="https://caedral.com/icon.svg" alt="Caedral" width="96"/>
 
-Built on top of `llama.cpp` as the inference kernel. Everything else — memory
-regimes, feature selection, expert caching, speculative decoding — lives in a
-dedicated layer outside it.
+# Caedral Notre Engine
+
+**`cne`** · A MoE inference engine for low-RAM, CPU-only machines.
+
+Run Mixture-of-Experts models that don't fit in memory by letting the engine
+choose and combine the right optimizations for your hardware and model —
+with explicit memory budgets, predictable behavior, and lossless output
+by default.
+
+![License](https://img.shields.io/badge/license-MIT-green)
+![Language](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20CPU--only-FCC624?logo=linux&logoColor=black)
+![Status](https://img.shields.io/badge/status-pre--alpha-orange)
+![Kernel](https://img.shields.io/badge/kernel-llama.cpp-c17?logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjciIGZpbGw9IiM4ODAiLz48L3N2Zz4)
+
+*Built on top of [llama.cpp](https://github.com/ggml-org/llama.cpp) as the
+inference kernel. Memory regimes, feature selection, expert caching and
+speculative decoding live in a dedicated layer outside it.*
+
+</div>
+
+---
 
 > **Status: pre-alpha.** The streaming pipeline and measurement tooling are
 > working end-to-end; the serving layer and user-facing profiles are next.
@@ -37,11 +52,11 @@ machine and inspects the model artifact, then decides which features activate:
 
 | Regime | Model vs available RAM | Streaming | Speculation | Residency & budget |
 |---|---|---|---|---|
-| R0 | model much smaller than RAM | **off** — the OS page cache already delivers every byte; streaming can only add overhead | available (same math as upstream) | plain mmap; the engine stays out of the way |
-| R1 | model about equal to RAM | **off** — page cache is competitive at this ratio | on when measured to pay | anon-dense weights: fault-free decode where vanilla mmap thrashes |
-| R2 | model 1-4x RAM | **on** — expert cache absorbs routing locality; misses stream from NVMe | on when measured to pay | budgets enforced; anon dense above the thrash line |
-| R3 | model 4-8x RAM | **on** — the core regime; most experts cannot stay resident | on when measured to pay | full budget enforcement |
-| R4 | model over 8x RAM | **on** — streaming is the only way to run at all | on; aggressive (opt-in) compression becomes the deciding lever | tightest budgets |
+| **R0** | much smaller than RAM | off — the OS page cache already delivers every byte; streaming can only add overhead | available (same math as upstream) | plain mmap; the engine stays out of the way |
+| **R1** | about equal to RAM | off — page cache is competitive at this ratio | on when measured to pay | anon-dense weights: fault-free decode where vanilla mmap thrashes |
+| **R2** | 1–4× RAM | on — expert cache absorbs routing locality; misses stream from NVMe | on when measured to pay | budgets enforced; anon dense above the thrash line |
+| **R3** | 4–8× RAM | on — the core regime; most experts cannot stay resident | on when measured to pay | full budget enforcement |
+| **R4** | over 8× RAM | on — streaming is the only way to run at all | on; aggressive (opt-in) compression becomes the deciding lever | tightest budgets |
 
 **When speculation makes sense.** Drafting only pays if the accepted tokens
 per verify pass outweigh the extra draft plus batched-verify compute. The
@@ -50,7 +65,7 @@ pay (small models, low-acceptance domains, or CPUs where batched matmuls
 cost more than sequential ones), it deactivates automatically instead of
 guessing.
 
-**When streaming makes sense.** Below roughly 1.6x model-to-RAM ratio the
+**When streaming makes sense.** Below roughly 1.6× model-to-RAM ratio the
 page cache does the same job for free, so streaming stays off. From R2
 upward the cache-plus-stream pipeline wins on stability (orders of magnitude
 fewer page faults) and, as the ratio grows, on velocity.
@@ -75,21 +90,21 @@ Users state intent; the engine resolves settings:
 { "quality": "lossless" }   // or "balanced" | "fast"  (planned)
 ```
 
-Manual environment variables remain available for development and
-measurement (`CNE_*`, see below) — but they are knobs, not the interface.
-
-### Feature set
+## Feature set
 
 | Feature | Status | What it does |
 |---|---|---|
-| Expert cache + NVMe streaming | working | LRU-cached expert slices, filled on demand via O_DIRECT through parallel I/O lanes; misses read only what the router asked for |
-| GGUF alignment (`cne-prepare`) | working | one-time pass that 4096-aligns every expert tensor so O_DIRECT needs no bounce buffers |
-| Dense residency policies | working | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
-| Memory budget manager | working | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
-| Regime classification | working | R0–R4 detection at load time drives feature selection |
-| Draft-MTP speculation | experimental | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction; CPU economics under evaluation |
-| Mixed-precision serving | designed | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
-| OpenAI-compatible server | planned | SSE endpoint on top of the extracted runtime |
+| Expert cache + NVMe streaming | ![](https://img.shields.io/badge/status-working-brightgreen) | LRU-cached expert slices, filled on demand via O_DIRECT through parallel I/O lanes; misses read only what the router asked for |
+| GGUF alignment (`cne_prepare`) | ![](https://img.shields.io/badge/status-working-brightgreen) | one-time pass that 4096-aligns every expert tensor so O_DIRECT needs no bounce buffers |
+| Dense residency policies | ![](https://img.shields.io/badge/status-working-brightgreen) | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
+| Memory budget manager | ![](https://img.shields.io/badge/status-working-brightgreen) | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
+| Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
+| Draft-MTP speculation | ![](https://img.shields.io/badge/status-experimental-orange) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction; CPU economics under evaluation |
+| Mixed-precision serving | ![](https://img.shields.io/badge/status-designed-blue) | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-planned-lightgrey) | SSE endpoint on top of the extracted runtime |
+
+Full per-feature guidance — including when *not* to use each one — lives in
+**[docs/FEATURES.md](docs/FEATURES.md)**.
 
 ## Principles
 
@@ -127,7 +142,7 @@ Client (OpenAI SDK / Open WebUI / n8n)
              NVMe / Flash (GGUF shards)
 ```
 
-Today the runtime speaks through `cne-bench` (measurement driver); the
+Today the runtime speaks through `cne_bench` (measurement driver); the
 server wraps the same API surface later.
 
 ## Repository layout
@@ -139,17 +154,15 @@ core/src/memory/           memory budgets + regime classification
 core/src/features/
   streaming/               slice cache · O_DIRECT file · I/O lane scheduler
 adapters/                  llama.cpp seam:
-                             stream_cb.cpp   demand-serving runtime
-                             stream_spec.cpp draft-MTP generation loop
+                             cne_stream_cb.cpp   demand-serving runtime
+                             cne_stream_spec.cpp draft-MTP generation loop
 tools/                     drivers & probes:
-                             cne_bench   end-to-end bench
-                             cne_prepare           GGUF alignment tool
-                             cne_identity_gate     correctness harness
-                             cne_probe_*           graph/rebind/callback probes
-tests/                     unit tests mirroring core areas
+                             cne_bench       end-to-end bench
+                             cne_prepare     GGUF alignment tool
+                             cne_identity_gate  correctness harness
+tests/features/            unit tests mirroring core areas
+docs/                      FEATURES.md · per-model notes
 third_party/               llama.cpp (pinned upstream submodule)
-docs/models/               per-model notes bound to specific artifacts
-docs/FEATURES.md           feature guide: what exists, when to use it
 ```
 
 ## Quick start
@@ -170,7 +183,7 @@ cmake --build build -j
     models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
     8 64 0 0
 
-# run: streaming mode (last arg 1 = rebind/stream ON)
+# run: streaming mode (last arg 1 = stream ON)
 CNE_LANES=4 ./build/tools/cne_bench \
     models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
     8 64 0 1
@@ -179,7 +192,8 @@ CNE_LANES=4 ./build/tools/cne_bench \
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
 
-### Environment knobs (development)
+<details>
+<summary><strong>Environment knobs (development)</strong></summary>
 
 | Variable | Values | Effect |
 |---|---|---|
@@ -193,6 +207,8 @@ The cache cap is automatically clamped to the machine's real budget.
 | `CNE_PPL_FILE` | path | whole-model perplexity mode over a text corpus |
 
 Legacy `SOE_*` spellings are accepted everywhere during migration.
+
+</details>
 
 ## Correctness
 
@@ -214,19 +230,26 @@ plain greedy decoding — speedup without changing results.
 
 ## Roadmap
 
-1. streaming pipeline, budget manager, regime classification, tooling
-2. draft-MTP speculation: performance evaluation on CPU (telemetry +
-   depth/probability sweeps); keep flag-gated until it beats sequential
+1. Streaming pipeline, budget manager, regime classification, tooling — **done**
+2. Draft-MTP speculation: performance evaluation on CPU (telemetry +
+   depth/probability sweeps); stays flag-gated until it beats sequential
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
-5. Runtime extraction hardening → `cne-server` with OpenAI-compatible SSE
+5. Runtime hardening → `cne-server` with OpenAI-compatible SSE
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`)
 7. Multi-user serving, autotune, packaging
 
 Non-goals: GPU offloading, training/fine-tuning, dense-model optimization
 (that's llama.cpp's job), Windows/macOS support initially.
 
-## License
+---
+
+<div align="center">
+
+Part of the [Caedral](https://caedral.com) ecosystem —
+prepaid AI infrastructure for automation agencies.
 
 MIT — see [LICENSE](LICENSE).
+
+</div>
