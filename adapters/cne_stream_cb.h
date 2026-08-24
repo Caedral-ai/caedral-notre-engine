@@ -1,6 +1,6 @@
 #pragma once
 // Demand-serving runtime: router-harvest callback, expert windows, slice
-// fills, L2 conditional execution, prefetch overlap, anon-dense binding.
+// fills, expert-mass gating, prefetch overlap, anon-dense binding.
 //
 // This is the engine's RUNTIME, previously embedded in tools/streaming-bench.
 // All state lives inside stream_cb.cpp under a single-decode assumption;

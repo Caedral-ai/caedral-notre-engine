@@ -104,8 +104,9 @@ int main(int argc, char** argv) {
                : g_dense == DensePolicy::WARM ? "warm" : "mmap");
     }
 
-    // Budget manager: clamp the cache cap to what this machine can hold.
-    // The 12G-cap OOM experiment is impossible by construction now.
+    // Budget manager: clamp the cache cap to what this machine can hold,
+    // so an oversized user cap degrades gracefully instead of getting the
+    // process OOM-killed mid-generation.
     cne::MemoryBudget budget = cne::MemoryBudget::detect();
     budget.kv = 64u << 20;         // measured: llama compute buffer + KV/S-state
     budget.staging = 64u << 20;
@@ -131,17 +132,21 @@ int main(int argc, char** argv) {
                cne::regime_name(regime), effective >> 20);
     }
 
-    // L2 knob: DEFAULT UNSET = lossless full-k. Loud telemetry when active.
+    // Expert-mass gating (conditional expert execution): DEFAULT UNSET =
+    // lossless full top-k. When set, tail experts below the cumulative
+    // routing-mass threshold are dropped per token. This is LOSSY - loud
+    // telemetry whenever active.
     float l2_mass = 0.0f;
     int l2_min_k = 2;
     if (cne::env("EXPERT_MASS")) {
         l2_mass = (float)atof(cne::env("EXPERT_MASS"));
         l2_min_k = cne::env("EXPERT_MIN_K") ? atoi(cne::env("EXPERT_MIN_K")) : 2;
         if (l2_mass <= 0.0f || l2_mass > 1.0f) {
-            fprintf(stderr, "[L2] invalid CNE_EXPERT_MASS (or legacy SOE_EXPERT_MASS) - knob disabled\n");
+            fprintf(stderr, "[expert-mass] invalid CNE_EXPERT_MASS (or legacy "
+                            "SOE_EXPERT_MASS) - gating disabled\n");
             l2_mass = 0.0f;
         } else {
-            printf("*** [L2] ACTIVE: expert-mass=%.2f min_k=%d "
+            printf("*** [expert-mass] ACTIVE: mass=%.2f min_k=%d "
                    "(LOSSY profile - quality degradation expected) ***\n",
                    l2_mass, l2_min_k);
         }
@@ -262,11 +267,12 @@ int main(int argc, char** argv) {
                                              : "The capital of France is";
     const auto* vocab  = llama_model_get_vocab(model);
 
-    // ---- PL whole-model PPL mode (policy-aware: L2/anon apply) ----
-    // Chunked CE over a plain-text corpus: windows of ctx tokens, non-
-    // overlapping, memory cleared between windows. This is the canonical
-    // whole-model gate because external llama-perplexity cannot apply our
-    // callback policies (L2 knob etc).
+    // ---- Whole-model perplexity mode (policy-aware: expert-mass gating and
+    // anon-dense residency apply) ----
+    // Chunked cross-entropy over a plain-text corpus: windows of ctx tokens,
+    // non-overlapping, memory cleared between windows. This is the canonical
+    // whole-model quality gate because external llama-perplexity cannot apply
+    // our callback policies (expert-mass gating, residency, streaming).
     if (cne::env("PPL_FILE")) {
         const char* pf = cne::env("PPL_FILE");
         std::ifstream cf(pf);
@@ -324,7 +330,7 @@ int main(int argc, char** argv) {
         printf("engine-ppl: %.4f (ntok %lld, windows %d, n_ctx %d)\n",
                ppl, ntok, wins, ctx_size);
         if (l2_mass > 0.0f)
-            printf("[L2] dropped slices total: %ld\n",
+            printf("[expert-mass] dropped slices total: %ld\n",
                    cne::stream_telemetry().l2_dropped);
         llama_free(ctx);
         llama_model_free(model);
@@ -468,7 +474,7 @@ int main(int argc, char** argv) {
            tel.fill_s, fill_frac, (unsigned long long)tel.fill_calls);
     printf("prefetched slices  : %llu\n", (unsigned long long)st.prefetched);
     if (tel.l2_mass > 0.0f)
-        printf("[L2] dropped slices: %ld (mass=%.2f min_k=%d)\n",
+        printf("[expert-mass] dropped slices: %ld (mass=%.2f min_k=%d)\n",
                tel.l2_dropped, tel.l2_mass, tel.l2_min_k);
 
     llama_sampler_free(smpl);

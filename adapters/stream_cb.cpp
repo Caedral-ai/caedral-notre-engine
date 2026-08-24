@@ -1,6 +1,6 @@
 // Demand-serving runtime implementation. Extracted from
 // tools/streaming-bench.cpp: router-harvest callback, expert
-// windows, slice fills, L2 conditional execution, prefetch overlap,
+// windows, slice fills, expert-mass gating, prefetch overlap,
 // anon-dense binding, audit/dump instrumentation. Single-decode assumption.
 #include "cne_stream_cb.h"
 
@@ -107,7 +107,7 @@ void read_ids_strided(const ggml_tensor* ids, std::vector<int32_t>& out) {
 
 State g;
 
-// ---- L2: conditional expert execution (expert-mass knob) ------------------
+// ---- Expert-mass gating (conditional expert execution) --------------------
 float g_l2_mass = 0.0f;      // 0 = disabled (lossless)
 int g_l2_min_k = 2;
 long g_l2_dropped_slices = 0;
@@ -322,7 +322,7 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
             if (v.empty())
                 return true;
 
-            // Rank-aware conditional execution (L2 knob): walk the ranked ids
+            // Rank-aware conditional execution: walk the ranked ids
             // ascending, accumulate normalized probability mass over the USED
             // experts, drop every rank past the mass threshold (min floor kept).
             // Dropped ids are excluded from the fill list so their window slices
@@ -464,7 +464,7 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
             if (kit != g_fresh_kept.end() && !kit->second.empty())
                 v = kit->second;   // fresh + mass-filtered routing from this eval's router
             else {
-                read_ids_strided(ids, v);   // lossless fallback (no stash: knob off)
+                read_ids_strided(ids, v);   // lossless fallback (gating disabled)
             }
         }
         const int n = (int)v.size();

@@ -1,6 +1,6 @@
 #pragma once
-// Engine configuration: profiles (SAFE-8G, BALANCED-16G, FAST-32G, EDGE-12G,
-// DEBUG), runtime knobs, lossless/accelerated contract.
+// Engine configuration types and runtime knob lookup. Lossless behavior is
+// the default; anything that changes model math is an explicit opt-in.
 #include <cstddef>
 #include <string>
 

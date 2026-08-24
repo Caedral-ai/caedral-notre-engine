@@ -34,7 +34,7 @@ struct MemoryBudget {
     // one; 2G held stable across every scoped/unscoped configuration tried.
     size_t base_reserve = 2048u << 20;
 
-    size_t expert_cache = 0;     // SliceCache hard cap (the knob we clamp)
+    size_t expert_cache = 0;     // SliceCache hard cap (the value the budget manager clamps)
     size_t shared_experts = 0;   // mandatory-resident bytes
     size_t kv = 0;               // attention KV + recurrent state
     size_t staging = 0;          // quantize/compute scratch
