@@ -724,7 +724,15 @@ int main(int argc, char** argv) {
     cparams.n_threads_batch  = 8;
     cparams.cb_eval          = cb_eval;
     cparams.cb_eval_user_data = nullptr;
-    if (getenv("SOE_MTP")) cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    // NOTE: LLAMA_CONTEXT_TYPE_MTP belongs on the DRAFT context only - it
+    // builds graph_mtp (nextn block alone). On the target it replaces the
+    // full decoder graph, so sampling reads 1-layer draft logits and output
+    // degenerates into repetition loops (observed 2026-08-24). Target stays
+    // DEFAULT; the MTP draft loop arrives with common_speculative wiring.
+    if (getenv("SOE_MTP"))
+        fprintf(stderr,
+                "[bench] SOE_MTP set: load_mtp=true (nextn tensors resident, "
+                "draft graph NOT wired yet - no speedup expected)\n");
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
