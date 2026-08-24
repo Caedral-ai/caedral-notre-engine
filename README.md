@@ -57,14 +57,14 @@ measurement (`CNE_*`, see below) — but they are knobs, not the interface.
 
 | Feature | Status | What it does |
 |---|---|---|
-| Expert cache + NVMe streaming | ✅ working | LRU-cached expert slices, filled on demand via O_DIRECT through parallel I/O lanes; misses read only what the router asked for |
-| GGUF alignment (`cne-prepare`) | ✅ working | one-time pass that 4096-aligns every expert tensor so O_DIRECT needs no bounce buffers |
-| Dense residency policies | ✅ working | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
-| Memory budget manager | ✅ working | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
-| Regime classification | ✅ working | R0–R4 detection at load time drives feature selection |
-| Draft-MTP speculation | 🔶 experimental | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction; CPU economics under evaluation |
-| Mixed-precision serving | 🔬 designed | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
-| OpenAI-compatible server | 🧭 planned | SSE endpoint on top of the extracted runtime |
+| Expert cache + NVMe streaming | working | LRU-cached expert slices, filled on demand via O_DIRECT through parallel I/O lanes; misses read only what the router asked for |
+| GGUF alignment (`cne-prepare`) | working | one-time pass that 4096-aligns every expert tensor so O_DIRECT needs no bounce buffers |
+| Dense residency policies | working | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
+| Memory budget manager | working | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
+| Regime classification | working | R0–R4 detection at load time drives feature selection |
+| Draft-MTP speculation | experimental | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction; CPU economics under evaluation |
+| Mixed-precision serving | designed | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
+| OpenAI-compatible server | planned | SSE endpoint on top of the extracted runtime |
 
 ## Principles
 
@@ -185,8 +185,8 @@ plain greedy decoding — speedup without changing results.
 
 ## Roadmap
 
-1. ✅ streaming pipeline, budget manager, regime classification, tooling
-2. 🔶 draft-MTP speculation: performance evaluation on CPU (telemetry +
+1. streaming pipeline, budget manager, regime classification, tooling
+2. draft-MTP speculation: performance evaluation on CPU (telemetry +
    depth/probability sweeps); keep flag-gated until it beats sequential
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class

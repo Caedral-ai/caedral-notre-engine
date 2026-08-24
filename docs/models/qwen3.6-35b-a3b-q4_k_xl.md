@@ -4,7 +4,7 @@
 > quantization with native Multi-Token Prediction layers preserved for
 > lossless speculative decoding.
 >
-> STATUS: ✅ WORKING — verified on latest llama.cpp build, coherent output,
+> STATUS: WORKING — verified on latest llama.cpp build, coherent output,
 > streaming identity PASS within q4 profile.
 
 ---
