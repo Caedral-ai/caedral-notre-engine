@@ -690,6 +690,7 @@ int main(int argc, char** argv) {
     auto mparams = llama_model_default_params();
     mparams.n_gpu_layers    = 0;
     mparams.use_extra_bufts = false;
+    if (getenv("SOE_MTP")) mparams.load_mtp = true;
     llama_model* model = llama_model_load_from_file(argv[1], mparams);
     if (!model) { fprintf(stderr, "[streaming-bench] LOAD FAILED\n"); return 1; }
 
@@ -723,6 +724,7 @@ int main(int argc, char** argv) {
     cparams.n_threads_batch  = 8;
     cparams.cb_eval          = cb_eval;
     cparams.cb_eval_user_data = nullptr;
+    if (getenv("SOE_MTP")) cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
