@@ -200,6 +200,9 @@ The cache cap is automatically clamped to the machine's real budget.
 | `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
 | `CNE_LANES` | N | parallel slice-read workers (default 4) |
 | `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k) |
+| `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |
+| `CNE_THREADS` | N | compute threads (default 8); physical-core count beats SMT on many laptops |
+| `CNE_KV_Q8` | set = on | q8_0 KV cache; measured CPU regression on the reference machine, kept for re-measurement |
 | `CNE_EXPERT_MASS` | 0 < x ≤ 1 | **lossy**: drop tail experts below cumulative routing mass |
 | `CNE_EXPERT_MIN_K` | N | minimum experts kept when mass gating is active |
 | `CNE_CTX` | N | context size |

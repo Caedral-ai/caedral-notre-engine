@@ -233,6 +233,8 @@ These exist for engine work, not for end users:
 | Knob | Purpose |
 |---|---|
 | `CNE_CTX`, `CNE_PROMPT` | context size / custom prompt |
+| `CNE_THREADS` | compute threads (default 8; 6 measured fastest on 4c/8t hardware) |
+| `CNE_KV_Q8` | q8_0 KV cache (measured CPU regression, kept for re-measurement) |
 | `CNE_DUMP_DST`, `CNE_DUMP_LOGITS(_EVERY)` | dump tensors/logits for divergence hunts |
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
