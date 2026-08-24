@@ -10,6 +10,7 @@
 #include "speculative.h"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -25,6 +26,7 @@ SpecStats spec_mtp_generate(llama_model* model,
                             llama_context* ctx,
                             const std::vector<llama_token>& prompt,
                             int n_max,
+                            float p_min,
                             int n_gen,
                             ggml_backend_sched_eval_callback cb,
                             void (*on_token)(void*, llama_token),
@@ -38,6 +40,7 @@ SpecStats spec_mtp_generate(llama_model* model,
     common_params params;
     params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
     params.speculative.draft.n_max = n_max;
+    params.speculative.draft.p_min = p_min;
     params.sampling.temp = 0.0f;   // greedy acceptance
     params.cb_eval = cb;           // demand-serving in the draft graph too
     // Both contexts must see the SAME weight buffers: a draft context with
@@ -121,7 +124,10 @@ SpecStats spec_mtp_generate(llama_model* model,
                 /* .prompt   = */ &prompt_tgt,
                 /* .result   = */ &draft,
             };
+            auto t_draft0 = std::chrono::steady_clock::now();
             common_speculative_draft(spec.get());
+            stats.draft_s += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t_draft0).count();
 
             if (!draft.empty() && use_ckpt_tgt)
                 ckpt.update_tgt(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -139,14 +145,22 @@ SpecStats spec_mtp_generate(llama_model* model,
         for (size_t i = 0; i < draft.size(); ++i)
             common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
 
+        auto t_verify0 = std::chrono::steady_clock::now();
         if (llama_decode(ctx, batch_tgt)) {
             fprintf(stderr, "\n[cne] DECODE FAILED (mtp verify)\n");
             break;
         }
+        stats.verify_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_verify0).count();
+        stats.iterations++;
+
+        auto t_proc0 = std::chrono::steady_clock::now();
         if (!common_speculative_process(spec.get(), batch_tgt)) {
             fprintf(stderr, "\n[cne] SPEC PROCESS FAILED\n");
             break;
         }
+        stats.process_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_proc0).count();
 
         common_sampler_ptr smpl_save;
         if (use_ckpt_tgt)

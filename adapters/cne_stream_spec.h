@@ -16,6 +16,13 @@ struct SpecStats {
     long drafted  = 0;   // draft tokens proposed
     long accepted = 0;   // draft tokens verified and kept
     int  produced = 0;   // tokens emitted (excludes EOS)
+    // Timing telemetry (seconds). draft = drafter forwards; process =
+    // speculative state catch-up (also drafter-side work); verify = the
+    // batched target forward that validates 1+k tokens per iteration.
+    double draft_s   = 0;
+    double process_s = 0;
+    double verify_s  = 0;
+    long   iterations = 0;
 };
 
 // Size the target context's output buffers for verify batches of up to
@@ -27,6 +34,8 @@ void spec_mtp_size_outputs(struct llama_context_params& cparams,
 //
 //  - prompt: full tokenized prompt (special tokens included).
 //  - n_max: maximum draft depth per iteration.
+//  - p_min: minimum draft-token probability; shorter drafts on uncertain
+//           steps (0 = always draft the full depth).
 //  - n_gen: generation budget (produced stops at this count).
 //  - cb: demand-serving eval callback, installed on BOTH the draft context
 //        created here and expected on the caller's target context.
@@ -35,6 +44,7 @@ SpecStats spec_mtp_generate(llama_model* model,
                             llama_context* ctx,
                             const std::vector<llama_token>& prompt,
                             int n_max,
+                            float p_min,
                             int n_gen,
                             ggml_backend_sched_eval_callback cb,
                             void (*on_token)(void* ud, llama_token id),

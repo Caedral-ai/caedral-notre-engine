@@ -230,9 +230,9 @@ int main(int argc, char** argv) {
     int mtp_k = 0;
     if (cne::env("MTP")) {
         mtp_k = atoi(cne::env("MTP"));
-        if (mtp_k == 1) mtp_k = 4;   // sane CPU default depth
         if (mtp_k < 0) mtp_k = 0;
     }
+    float mtp_p_min = cne::env("MTP_P_MIN") ? (float)atof(cne::env("MTP_P_MIN")) : 0.0f;
     if (mtp_k > 0) {
         cne::spec_mtp_size_outputs(cparams, mtp_k, (int)cparams.n_batch);
         fprintf(stderr, "[mtp] draft-mtp enabled: n_max=%d n_outputs_max=%u\n",
@@ -423,21 +423,36 @@ int main(int argc, char** argv) {
 
     // ---- MTP speculative decoding path (draft-mtp, greedy) ----
     if (mtp_k > 0 && produced < n_gen) {
-        struct Ctx {
-            FILE* out;
-        } ctx_cb{stdout};
         auto stats = cne::spec_mtp_generate(
-                model, ctx, toks, mtp_k, n_gen - produced,
+                model, ctx, toks, mtp_k, mtp_p_min, n_gen - produced,
                 cne::stream_cb_eval(),
                 [](void* ud, llama_token id) {
                     fprintf((FILE*)ud, " %d", id);
                     fflush((FILE*)ud);
                 },
-                &ctx_cb);
+                stdout);
         produced += stats.produced;
-        fprintf(stderr, "[mtp] drafted=%ld accepted=%ld (%.1f%%)\n",
-                stats.drafted, stats.accepted,
-                stats.drafted ? 100.0 * stats.accepted / stats.drafted : 0.0);
+        fprintf(stderr,
+                "[mtp] iterations=%ld drafted=%ld accepted=%ld (%.1f%%) "
+                "produced=%d\n",
+                stats.iterations, stats.drafted, stats.accepted,
+                stats.drafted ? 100.0 * stats.accepted / stats.drafted : 0.0,
+                stats.produced);
+        double spec_wall = stats.draft_s + stats.process_s + stats.verify_s;
+        long verify_rows = stats.iterations + stats.drafted;   // 1+k rows per iter
+        fprintf(stderr,
+                "[mtp] draft=%.2fs process=%.2fs verify=%.2fs (spec wall %.2fs)\n"
+                "[mtp] per-iteration: draft %.0f ms | verify %.0f ms for %ld "
+                "rows (%.0f ms/row)\n"
+                "[mtp] effective: %.0f ms/token over %d tokens "
+                "(sequential reference ~555 ms at this quant/hardware)\n",
+                stats.draft_s, stats.process_s, stats.verify_s, spec_wall,
+                stats.iterations ? 1000.0 * stats.draft_s / stats.iterations : 0.0,
+                stats.iterations ? 1000.0 * stats.verify_s / stats.iterations : 0.0,
+                verify_rows,
+                verify_rows ? 1000.0 * stats.verify_s / verify_rows : 0.0,
+                stats.produced ? 1000.0 * spec_wall / stats.produced : 0.0,
+                stats.produced);
     }
 
     cne::stream_prefetch_stop();
