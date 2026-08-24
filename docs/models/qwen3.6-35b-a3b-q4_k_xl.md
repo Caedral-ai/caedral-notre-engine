@@ -1,13 +1,11 @@
-# Qwen3.6-35B-A3B — UD-Q4_K_XL (lossy velocity profile)
+# Qwen3.6-35B-A3B — UD-Q4_K_XL + MTP (canonical runtime model)
 
-> Companion to `qwen3.6-35b-a3b.md` (lossless q8 reference). This artifact is
-> the canonical RUNTIME model since the 2026-08-23 pivot: whole-model q4-family
-> dynamic quantization, accepted bounded quality loss for ~half the streaming
-> bytes per cache miss.
+> This is THE model the engine runs. Whole-model q4-family dynamic
+> quantization with native Multi-Token Prediction layers preserved for
+> lossless speculative decoding.
 >
-> STATUS: ⚠️ OPEN ISSUE — stock llama.cpp (v0.2.0 pinned, CPU) produces NaN
-> logits on this quant (see section 4). Do not use for quality gates until
-> resolved.
+> STATUS: ✅ WORKING — verified on latest llama.cpp build, coherent output,
+> streaming identity PASS within q4 profile.
 
 ---
 
@@ -15,28 +13,28 @@
 
 | Field | Value |
 |---|---|
-| Source | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) |
+| Source | [`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) (MTP layers preserved) |
+| Base model | [`Qwen/Qwen3.6-35B-A3B`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) |
 | File | `Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` |
 | Quantization | Unsloth Dynamic Q4_K_XL (imatrix-calibrated; mixed q4_k/q5_k/q6_k/q8_0/f32 per-tensor) |
-| Downloaded size | 22,974,495,712 bytes (~21.4 GiB) |
-| GGUF architecture key | `qwen35moe` (same as q8 reference) |
-| Regeneration script | `tools/download-q4.sh` (fetch + soe-prepare align) |
+| Downloaded size | 22,853,663,008 bytes (~21.3 GiB) |
+| GGUF architecture key | `qwen35moe` |
+| Tensors | 753 (includes MTP prediction head) |
+| Regeneration script | `tools/download-qwen3.6-35b-a3b-q4_k_xl.sh` |
 
-## 2. Tensor-type census (observed via registry, both raw and prepared)
+## 2. Tensor-type census (prepared variant)
 
 | type | count | notes |
 |---|---|---|
-| f32 | 361 | norms, biases, precision-critical weights |
-| q4_k | 78 | attention + routed-expert tensors |
-| q5_k | 38 | attention + selected weights |
-| q6_k | 4 | output.head family |
-| q8_0 | 252 | embeddings + precision-retained weights |
+| bf16 | 2 | precision-critical |
+| f32 | 368 | norms, biases, precision-retained weights |
+| q4_k | 80 | attention + routed-expert tensors |
+| q5_k | 40 | attention + selected weights |
+| q6_k | 3 | output.head family |
+| q8_0 | 260 | embeddings + precision-retained weights |
 
-- Routed experts are **Q4_K**: expert slice = 720,896 bytes
-  (0.647× the q8 slice — the L1/I-O lever).
-- Shared experts (`ffn_*_shexp`) retained at higher precision than routed.
-- Prepared variant: identical type distribution, io_alignment=4096,
-  misaligned4096=0 — soe-prepare preserved types byte-faithfully.
+Prepared variant: io_alignment=4096, all routed slices 4096-aligned,
+types preserved byte-faithfully through soe-prepare.
 
 ## 3. Streaming geometry
 
@@ -44,28 +42,18 @@
   prepare → O_DIRECT-clean, no bounce buffers.
 - Miss bytes per token ≈ half of the q8 profile at identical routing.
 
-## 4. OPEN ISSUE — NaN in stock inference
+## 4. MTP speculative decoding
 
-Stock `llama-perplexity` (v0.2.0 pinned build, CPU, default settings)
-produces **NaN perplexity from chunk 1** on both the raw download and the
-aligned prepared file. Our own engine reproduces the failure identically
-(all-zero greedy tokens, pure-mmap arm included) — i.e., the issue is
-UPSTREAM of the streaming path.
+This artifact preserves the native Multi-Token Prediction head. When
+enabled via llama.cpp's `load_mtp = true` + `ctx_type = LLAMA_CONTEXT_TYPE_MTP`,
+the engine generates multiple tokens per forward pass:
 
-Ruled out:
-- soe-prepare corruption (raw download also NaNs; type census identical).
-- Our callback/policy flow (rebind=0 pure-mmap arm also NaNs).
+- Community-reported speedup: 1.4–2.2× on Qwen3.6 family
+- **Lossless by mathematical proof**: every draft token is verified against
+  the full model; accepted tokens are identical to non-speculative inference
+- Enable via env: `SOE_MTP=1` in our bench
 
-Remaining hypotheses:
-1. v0.2.0 CPU kernel bug with one of the Q4_K_XL tensor-type/layout
-   combinations (unsloth dynamic quants target newer llama.cpp releases).
-2. A tensor-type in this quant requires runtime support absent from the
-   pinned build.
-
-Next steps: bisect by tensor family (build a hybrid artifact keeping
-attention at q8, experts at q4_k) or test the same quant on a newer
-llama.cpp release. If neither resolves: switch profile to MXFP4_MOE or
-UD-Q4_K_M and repeat the census.
+No quality trade-off needed — MTP gives speed without changing any weight or computation result.
 
 ---
 
@@ -75,5 +63,4 @@ UD-Q4_K_M and repeat the census.
   windows, slice-level streaming) — the engine is quant-agnostic; all
   geometry comes from each loaded artifact's manifest.
 - Quality gates for this profile run against the LOCKED lossless numbers
-  (PTB-16: 13.3874 ±0.62 standalone / 16.9666 engine-ppl protocol) and the
-  saved drift tokens (models/eval/lossless_ref_64.toks).
+  and the saved drift tokens (models/eval/lossless_ref_64.toks).
