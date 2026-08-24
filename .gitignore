@@ -16,3 +16,4 @@ compile_commands.json
 /models/
 *.gguf
 *.bin
+__pycache__/
