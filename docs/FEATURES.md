@@ -132,9 +132,12 @@ routing mass is too evenly spread to ever drop an expert).
 
 ```sh
 # recommended fast config (lossless)
-CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6 CNE_CTX=1024 \
+CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6 CNE_FA=1 CNE_CTX=1024 \
     ./build/tools/cne_bench model.gguf
 ```
+
+Flash attention (`CNE_FA=1`) adds ~3% at ctx 1024 and scales with context
+length.
 
 Requires an artifact with MTP tensors preserved (the reference model download
 script fetches exactly that) and loads them via `load_mtp`.
