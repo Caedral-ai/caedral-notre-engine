@@ -1,17 +1,17 @@
 #!/bin/sh
-# download-model.sh — fetch + align the canonical runtime artifact.
+# download-qwen3.6-35b-a3b-q4_k_xl.sh — fetch + align the canonical runtime artifact.
 #
 # Downloads the unsloth dynamic q4 quant (UD-Q4_K_XL) with MTP layers
 # preserved, then runs soe-prepare to 4096-align all expert tensors for
 # O_DIRECT streaming. Resumable; verifies sha256 after download.
 #
 # Usage:
-#   ./tools/download-model.sh
+#   ./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
 set -eu
 
 REPO="unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 FILE="Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-MODEL_DIR="models/qwen3.6-35b-a3b-q4_k_xl"
+MODEL_DIR="models/qwen3.6-35b-a3b-q4_k_xl-mtp"
 DEST="$MODEL_DIR/$FILE"
 URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main/$FILE"
 
