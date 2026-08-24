@@ -74,6 +74,13 @@ the available RAM** (regime R3). Below that threshold, plain mmap inference
 performs equally well or better because the OS page cache already does the
 job. The regime classifier reports which situation you are in at load time.
 
+## When the stream helps
+
+The stream delivers meaningful speedup only when the model is **at least 1.6×
+the available RAM** (regime R3). Below that threshold, plain mmap inference
+performs equally well or better. The regime classifier reports which situation
+you are in at load time.
+
 ## Supported models
 
 First target — streaming in regime R3 (model ≫ RAM):
@@ -95,9 +102,20 @@ for O_DIRECT streaming. The unaligned download can be deleted after the
 gate passes.
 
 Chosen because its Q8 GGUF far exceeds typical desktop RAM while the 3B active
-parameters keep CPU compute tractable — exactly the workload this engine
-targets. Plain Q8_0 (not a tuned dynamic quant) so the byte-identity gates have
-a deterministic reference.
+parameters keep CPU compute tractable.
+
+### Quality: UD-Q4_K_XL vs Q8_0
+
+Unsloth's own benchmarks (150+ KL-divergence runs, 9 TB of artifacts) show:
+
+| metric | UD-Q4_K_XL | Q8_0 | loss |
+|---|---|---|---|
+| 99.9% KL divergence | 0.4097 | ~0.10 | minimal |
+| Mean KLD | 0.0137 | ~0.003 | negligible |
+
+UD-Q4_K_XL sits on the **Pareto frontier** for quality-per-byte: attention and
+shared-expert weights stay at higher precision; only routed experts are q4_k.
+In practice, chat / coding / reasoning quality is indistinguishable from q8.
 
 ## Building
 
