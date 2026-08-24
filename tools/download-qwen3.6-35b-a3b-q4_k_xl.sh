@@ -11,6 +11,7 @@ set -eu
 
 REPO="unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 FILE="Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+EXPECTED_SHA256="55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1"
 MODEL_DIR="models/qwen3.6-35b-a3b-q4_k_xl-mtp"
 DEST="$MODEL_DIR/$FILE"
 URL="https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main/$FILE"
@@ -40,6 +41,15 @@ if [ "$need_fetch" = 1 ]; then
          -o "$DEST" "$URL"
     echo "[dl] downloaded: $(stat -c%s "$DEST") bytes"
 fi
+
+echo "[dl] verifying sha256 ..."
+GOT=$(sha256sum "$DEST" | cut -d' ' -f1)
+if [ "$GOT" != "$EXPECTED_SHA256" ]; then
+    echo "[dl] FATAL: sha256 mismatch (got $GOT, want $EXPECTED_SHA256)" >&2
+    echo "[dl] corrupted download - delete $DEST and retry" >&2
+    exit 1
+fi
+echo "[dl] sha256 OK"
 
 echo "[dl] aligning expert tensors (soe-prepare) ..."
 ./build/tools/soe_prepare "$DEST"
