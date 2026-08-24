@@ -116,8 +116,8 @@ target verifies every draft over the full vocabulary, so this is lossless by
 construction.
 
 ```sh
-CNE_MTP=1 ./build/tools/cne_streaming_bench model.gguf   # depth 4
-CNE_MTP=2 ./build/tools/cne_streaming_bench model.gguf   # depth 2
+CNE_MTP=1 ./build/tools/cne_bench model.gguf   # depth 4
+CNE_MTP=2 ./build/tools/cne_bench model.gguf   # depth 2
 ```
 
 Requires an artifact with MTP tensors preserved (the reference model download
@@ -164,7 +164,7 @@ nothing because their slices are never read.
 
 ```sh
 CNE_EXPERT_MASS=0.75 CNE_EXPERT_MIN_K=2 \
-    ./build/tools/cne_streaming_bench model.gguf
+    ./build/tools/cne_bench model.gguf
 ```
 
 Loud telemetry marks every active run; dropped-slice counts are reported.
@@ -190,7 +190,7 @@ perplexity tools cannot reproduce callback-side policies, so this is the
 canonical way to measure quality effects of gating/residency/streaming.
 
 ```sh
-CNE_PPL_FILE=corpus.txt ./build/tools/cne_streaming_bench model.gguf
+CNE_PPL_FILE=corpus.txt ./build/tools/cne_bench model.gguf
 ```
 
 **Use when:** before and after enabling any lossy feature; report both

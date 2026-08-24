@@ -19,7 +19,7 @@ mkdir -p "$OUT/ref" "$OUT/cand"
 run_arm() {  # $1 rebind  $2 outprefix  $3 extra env
     systemd-run --user --scope -p MemoryMax=$SCOPE_MEM \
         env CNE_CTX=$CTX CNE_LANES=4 CNE_DUMP_LOGITS_EVERY=16 $3 \
-        "$DIR/../build/tools/cne_streaming_bench" "$MODEL" "$CAP" "$GEN" 0 "$1" \
+        "$DIR/../build/tools/cne_bench" "$MODEL" "$CAP" "$GEN" 0 "$1" \
         > "$OUT/$2.toks" 2> "$OUT/$2.err"
 }
 

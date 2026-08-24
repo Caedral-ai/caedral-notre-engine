@@ -16,8 +16,8 @@ target_compile_features(cne_lru_sim PRIVATE cxx_std_17)
 add_executable(cne_cb_semantics_probe cb-semantics-probe.cpp)
 target_link_libraries(cne_cb_semantics_probe PRIVATE cne_core cne_adapter)
 
-add_executable(cne_streaming_bench streaming-bench.cpp)
-target_link_libraries(cne_streaming_bench PRIVATE cne_core cne_adapter llama-common)
+add_executable(cne_bench cne-bench.cpp)
+target_link_libraries(cne_bench PRIVATE cne_core cne_adapter llama-common)
 
 add_executable(cne_prepare cne-prepare.cpp)
 target_link_libraries(cne_prepare PRIVATE cne_core)

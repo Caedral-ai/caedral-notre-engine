@@ -2,7 +2,7 @@
 // Demand-serving runtime: router-harvest callback, expert windows, slice
 // fills, expert-mass gating, prefetch overlap, anon-dense binding.
 //
-// This is the engine's RUNTIME, previously embedded in tools/streaming-bench.
+// This is the engine runtime, extracted from the measurement driver.
 // All state lives inside stream_cb.cpp under a single-decode assumption;
 // the driver only configures, drives step boundaries, and reads telemetry.
 #include "cne/cache.h"

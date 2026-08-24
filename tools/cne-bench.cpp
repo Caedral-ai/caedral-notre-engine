@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     cne::ModelRegistry reg;
     cne::ModelManifest manifest;
     if (!reg.build(argv[1], manifest)) {
-        fprintf(stderr, "[streaming-bench] manifest FAILED: %s\n", reg.error().c_str());
+        fprintf(stderr, "[cne-bench] manifest FAILED: %s\n", reg.error().c_str());
         return 1;
     }
 
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     mparams.use_extra_bufts = false;
     if (cne::env("MTP")) mparams.load_mtp = true;
     llama_model* model = llama_model_load_from_file(argv[1], mparams);
-    if (!model) { fprintf(stderr, "[streaming-bench] LOAD FAILED\n"); return 1; }
+    if (!model) { fprintf(stderr, "[cne-bench] LOAD FAILED\n"); return 1; }
 
     auto cparams             = llama_context_default_params();
     int ctx_size             = cne::env("CTX") ? atoi(cne::env("CTX")) : 256;
@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
     }
 
     llama_context* ctx = llama_init_from_model(model, cparams);
-    if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
+    if (!ctx) { fprintf(stderr, "[cne-bench] CONTEXT FAILED\n"); return 1; }
     // Warmup runs must stay off for models near or above RAM size: the
     // dummy-shape decode can page in large weight spans for no benefit.
     // Exception: MTP probing keeps upstream's warmup-on behavior, since the
@@ -366,15 +366,15 @@ int main(int argc, char** argv) {
             bp.logits[i] = false;
         }
         bp.n_tokens = n_tok > 1 ? n_tok - 1 : 1;
-        if (llama_decode(ctx, bp)) { fprintf(stderr, "[streaming-bench] PREFILL FAILED\n"); return 1; }
+        if (llama_decode(ctx, bp)) { fprintf(stderr, "[cne-bench] PREFILL FAILED\n"); return 1; }
         llama_batch_free(bp);
         llama_token il = toks.back();
         if (llama_decode(ctx, llama_batch_get_one(&il, 1))) {
-            fprintf(stderr, "[streaming-bench] PREFILL FAILED\n");
+            fprintf(stderr, "[cne-bench] PREFILL FAILED\n");
             return 1;
         }
     } else if (llama_decode(ctx, llama_batch_get_one(toks.data(), n_tok))) {
-        fprintf(stderr, "[streaming-bench] PREFILL FAILED\n");
+        fprintf(stderr, "[cne-bench] PREFILL FAILED\n");
         return 1;
     }
 
@@ -411,7 +411,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[bench] step %d\n", i);
         cne::stream_set_step(i);
         if (llama_decode(ctx, llama_batch_get_one(&id, 1))) {
-            fprintf(stderr, "\n[streaming-bench] DECODE FAILED\n");
+            fprintf(stderr, "\n[cne-bench] DECODE FAILED\n");
             return 1;
         }
         // stride limits tmpfs use on long canary runs (default: every token)
@@ -453,7 +453,7 @@ int main(int argc, char** argv) {
     cne::stream_check_windows();
     double hit = st.hits + st.misses ? 100.0 * st.hits / (st.hits + st.misses) : 0;
     auto tel = cne::stream_telemetry();
-    printf("=== streaming-bench summary ===\n");
+    printf("=== cne-bench summary ===\n");
     printf("tok/s              : %.2f\n", produced / secs);
     printf("produced           : %d in %.1fs\n", produced, secs);
     printf("cache hit rate     : %.2f%% (hits=%llu misses=%llu)\n", hit,

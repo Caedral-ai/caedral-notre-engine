@@ -142,7 +142,7 @@ adapters/                  llama.cpp seam:
                              stream_cb.cpp   demand-serving runtime
                              stream_spec.cpp draft-MTP generation loop
 tools/                     drivers & probes:
-                             cne_streaming_bench   end-to-end bench
+                             cne_bench   end-to-end bench
                              cne_prepare           GGUF alignment tool
                              cne_identity_gate     correctness harness
                              cne_probe_*           graph/rebind/callback probes
@@ -166,12 +166,12 @@ cmake --build build -j
 ./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
 
 # run: naive mmap baseline
-./build/tools/cne_streaming_bench \
+./build/tools/cne_bench \
     models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
     8 64 0 0
 
 # run: streaming mode (last arg 1 = rebind/stream ON)
-CNE_LANES=4 ./build/tools/cne_streaming_bench \
+CNE_LANES=4 ./build/tools/cne_bench \
     models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
     8 64 0 1
 ```

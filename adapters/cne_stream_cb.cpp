@@ -1,5 +1,5 @@
 // Demand-serving runtime implementation. Extracted from
-// tools/streaming-bench.cpp: router-harvest callback, expert
+// tools/cne-bench.cpp: router-harvest callback, expert
 // windows, slice fills, expert-mass gating, prefetch overlap,
 // anon-dense binding, audit/dump instrumentation. Single-decode assumption.
 #include "cne_stream_cb.h"

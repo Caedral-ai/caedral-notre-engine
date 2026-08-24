@@ -1,4 +1,8 @@
-# DirectFile, IoScheduler and SliceCache backend-mode tests.
+# SliceCache unit tests.
+add_executable(cne_test_cache test_cache.cpp)
+target_link_libraries(cne_test_cache PRIVATE cne_core)
+add_test(NAME cache_basic COMMAND cne_test_cache)
+
 add_executable(cne_test_direct_io test_direct_io.cpp)
 target_link_libraries(cne_test_direct_io PRIVATE cne_core)
 add_test(NAME direct_io COMMAND cne_test_direct_io)
