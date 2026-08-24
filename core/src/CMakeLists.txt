@@ -1,4 +1,5 @@
 add_library(cne_core STATIC
+    config.cpp
     gguf/gguf.cpp
     gguf/classify.cpp
     gguf/model_registry.cpp

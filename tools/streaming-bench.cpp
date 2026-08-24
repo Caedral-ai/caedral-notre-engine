@@ -9,6 +9,7 @@
 #include "cne/io_scheduler.h"
 #include "cne/memory_budget.h"
 #include "cne/model.h"
+#include "cne/config.h"
 #include "cne/model_registry.h"
 
 #include "cne_stream_cb.h"
@@ -80,7 +81,7 @@ int main(int argc, char** argv) {
     // smaller regimes stay mmap (nothing to protect from reclaim).
     DensePolicy g_dense = DensePolicy::MMAP;
     {
-        const char* dp = getenv("SOE_DENSE");
+        const char* dp = cne::env("DENSE");
         std::string s = dp ? dp : "";
         cne::MemoryBudget pre = cne::MemoryBudget::detect();
         uint64_t dense_bytes = 0;
@@ -133,9 +134,9 @@ int main(int argc, char** argv) {
     // L2 knob: DEFAULT UNSET = lossless full-k. Loud telemetry when active.
     float l2_mass = 0.0f;
     int l2_min_k = 2;
-    if (getenv("SOE_EXPERT_MASS")) {
-        l2_mass = (float)atof(getenv("SOE_EXPERT_MASS"));
-        l2_min_k = getenv("SOE_EXPERT_MIN_K") ? atoi(getenv("SOE_EXPERT_MIN_K")) : 2;
+    if (cne::env("EXPERT_MASS")) {
+        l2_mass = (float)atof(cne::env("EXPERT_MASS"));
+        l2_min_k = cne::env("EXPERT_MIN_K") ? atoi(cne::env("EXPERT_MIN_K")) : 2;
         if (l2_mass <= 0.0f || l2_mass > 1.0f) {
             fprintf(stderr, "[L2] invalid SOE_EXPERT_MASS - knob disabled\n");
             l2_mass = 0.0f;
@@ -150,7 +151,7 @@ int main(int argc, char** argv) {
     // kept flag-gated for future capacity-pressure regimes.
     cne::PfMode pf_mode = cne::PfMode::OFF;
     {
-        const char* pf = getenv("SOE_PREFETCH");
+        const char* pf = cne::env("PREFETCH");
         std::string pfs = pf ? pf : "";
         if (pfs == "1" || pfs == "lookahead")
             pf_mode = cne::PfMode::LOOKAHEAD;
@@ -164,15 +165,15 @@ int main(int argc, char** argv) {
     // Runtime wiring: callback machinery + fill backend.
     cne::StreamConfig cfg;
     cfg.rebind     = rebind;
-    cfg.full_fill  = getenv("SOE_FULL_FILL") != nullptr;
-    cfg.step_fills = getenv("SOE_STEP_FILLS") != nullptr;
+    cfg.full_fill  = cne::env("FULL_FILL") != nullptr;
+    cfg.step_fills = cne::env("STEP_FILLS") != nullptr;
     cfg.l2_mass    = l2_mass;
     cfg.l2_min_k   = l2_min_k;
     cfg.pf_mode    = pf_mode;
     cne::stream_init(manifest, cache, cfg);
 
     bool use_odirect = cne::stream_open_fill_backend(argv[1],
-                         getenv("SOE_LANES") ? atoi(getenv("SOE_LANES")) : 4);
+                         cne::env("LANES") ? atoi(cne::env("LANES")) : 4);
     cne::stream_prefetch_start();
 
     // WARM policy: page in all dense spans before context creation.
@@ -201,12 +202,12 @@ int main(int argc, char** argv) {
     auto mparams = llama_model_default_params();
     mparams.n_gpu_layers    = 0;
     mparams.use_extra_bufts = false;
-    if (getenv("SOE_MTP")) mparams.load_mtp = true;
+    if (cne::env("MTP")) mparams.load_mtp = true;
     llama_model* model = llama_model_load_from_file(argv[1], mparams);
     if (!model) { fprintf(stderr, "[streaming-bench] LOAD FAILED\n"); return 1; }
 
     auto cparams             = llama_context_default_params();
-    int ctx_size             = getenv("SOE_CTX") ? atoi(getenv("SOE_CTX")) : 256;
+    int ctx_size             = cne::env("CTX") ? atoi(cne::env("CTX")) : 256;
     if (ctx_size < 64) ctx_size = 64;
     cparams.n_ctx            = ctx_size;
     cparams.n_batch          = ctx_size < 512 ? ctx_size : 512;
@@ -220,8 +221,8 @@ int main(int argc, char** argv) {
     // type builds graph_mtp (nextn block alone) and belongs on the DRAFT
     // context, which common_speculative_init_from_params creates for us.
     int mtp_k = 0;
-    if (getenv("SOE_MTP")) {
-        mtp_k = atoi(getenv("SOE_MTP"));
+    if (cne::env("MTP")) {
+        mtp_k = atoi(cne::env("MTP"));
         if (mtp_k == 1) mtp_k = 4;   // sane CPU default depth
         if (mtp_k < 0) mtp_k = 0;
     }
@@ -236,7 +237,7 @@ int main(int argc, char** argv) {
     // E7: warmup-off is mandatory for big models - EXCEPT when probing the
     // MTP path: upstream's harness keeps warmup on, and the nextn-augmented
     // graph may need shaped buffers before real decodes (bisect knob).
-    if (!getenv("SOE_MTP"))
+    if (!cne::env("MTP"))
         llama_set_warmup(ctx, false);
 
     // ANON policy: one scan decode binds every dense weight to anon memory,
@@ -254,7 +255,7 @@ int main(int argc, char** argv) {
                cne::stream_dense_anon_bytes() >> 20);
     }
 
-    const char* prompt = getenv("SOE_PROMPT") ? getenv("SOE_PROMPT")
+    const char* prompt = cne::env("PROMPT") ? cne::env("PROMPT")
                                              : "The capital of France is";
     const auto* vocab  = llama_model_get_vocab(model);
 
@@ -263,8 +264,8 @@ int main(int argc, char** argv) {
     // overlapping, memory cleared between windows. This is the canonical
     // whole-model gate because external llama-perplexity cannot apply our
     // callback policies (L2 knob etc).
-    if (getenv("SOE_PPL_FILE")) {
-        const char* pf = getenv("SOE_PPL_FILE");
+    if (cne::env("PPL_FILE")) {
+        const char* pf = cne::env("PPL_FILE");
         std::ifstream cf(pf);
         if (!cf) { fprintf(stderr, "[ppl] cannot open %s\n", pf); return 1; }
         std::string text((std::istreambuf_iterator<char>(cf)),
@@ -344,7 +345,7 @@ int main(int argc, char** argv) {
     if (mtp_k > 0) {
         // MTP path below does its own two-phase prefill (n-1 tokens, then
         // the last token together with the first verify batch).
-    } else if (getenv("SOE_SPLIT_PREFILL")) {
+    } else if (cne::env("SPLIT_PREFILL")) {
         // Bisect knob: same two-phase prefill shape as the MTP path
         // (n-1 tokens, then 1) WITHOUT any speculation.
         llama_batch bp = llama_batch_init(n_tok > 1 ? (size_t)(n_tok - 1) : 1, 0, 1);
@@ -380,9 +381,9 @@ int main(int argc, char** argv) {
     int produced = 0;
     long mtp_drafted = 0, mtp_accepted = 0;
     const int dump_every =
-        getenv("SOE_DUMP_LOGITS_EVERY") ? atoi(getenv("SOE_DUMP_LOGITS_EVERY")) : 1;
+        cne::env("DUMP_LOGITS_EVERY") ? atoi(cne::env("DUMP_LOGITS_EVERY")) : 1;
     auto dump_logits = [&](int tag) {
-        const char* ldir = getenv("SOE_DUMP_LOGITS");
+        const char* ldir = cne::env("DUMP_LOGITS");
         if (!ldir || !*ldir) return;
         float* lg = llama_get_logits_ith(ctx, 0);
         int nv = llama_vocab_n_tokens(vocab);

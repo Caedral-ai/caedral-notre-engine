@@ -4,6 +4,7 @@
 // anon-dense binding, audit/dump instrumentation. Single-decode assumption.
 #include "cne_stream_cb.h"
 
+#include "cne/config.h"
 #include "cne/direct_io.h"
 #include "cne/io_scheduler.h"
 #include "cne/tensor_classify.h"
@@ -203,7 +204,7 @@ bool g_step_fills = false;
 long g_audit_checks = 0;
 
 void maybe_dump_dst(ggml_tensor* t, long step) {
-    const char* dir = getenv("SOE_DUMP_DST");
+    const char* dir = cne::env("DUMP_DST");
     if (!dir || !*dir || !t || !t->data || step < -1) return;
     char path[512];
     std::string clean = t->name;
@@ -241,7 +242,7 @@ bool g_full_fill = false;   // debug: fill whole windows once at creation
 
 void ensure_window(const char* name, ggml_tensor* w) {
     if (!g_rebind) return;
-    static int layer_limit = getenv("SOE_LAYER_LIMIT") ? atoi(getenv("SOE_LAYER_LIMIT")) : -1;
+    static int layer_limit = cne::env("LAYER_LIMIT") ? atoi(cne::env("LAYER_LIMIT")) : -1;
     if (layer_limit >= 0) {
         int L = parse_layer_index(name);
         if (L < 0 || L >= layer_limit) return;

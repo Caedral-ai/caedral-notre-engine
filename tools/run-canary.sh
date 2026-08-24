@@ -1,7 +1,7 @@
 #!/bin/sh
 # PL-T1 long-gen canary runner. Sequential MemoryMax-scoped model jobs -
 # ONE at a time (PL-T0 hardware rule). Lossless arm (rebind=0) vs lossy arm
-# (rebind=1 + optional QUALITY_FLAGS, e.g. future SOE_EXPERT_MASS/quality).
+# (rebind=1 + optional QUALITY_FLAGS, e.g. future CNE_EXPERT_MASS/quality).
 # Then drift_gate canary (degeneration loops, divergence) over both streams.
 #
 # usage: run-canary.sh [cap_gib] [n_gen] [ctx]
@@ -18,7 +18,7 @@ mkdir -p "$OUT/ref" "$OUT/cand"
 
 run_arm() {  # $1 rebind  $2 outprefix  $3 extra env
     systemd-run --user --scope -p MemoryMax=$SCOPE_MEM \
-        env SOE_CTX=$CTX SOE_LANES=4 SOE_DUMP_LOGITS_EVERY=16 $3 \
+        env CNE_CTX=$CTX CNE_LANES=4 CNE_DUMP_LOGITS_EVERY=16 $3 \
         "$DIR/../build/tools/cne_streaming_bench" "$MODEL" "$CAP" "$GEN" 0 "$1" \
         > "$OUT/$2.toks" 2> "$OUT/$2.err"
 }

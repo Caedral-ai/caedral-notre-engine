@@ -18,3 +18,12 @@ struct Config {
 };
 
 }
+
+namespace cne {
+
+// Runtime knob lookup: reads "CNE_<name>" first and falls back to the
+// legacy "SOE_<name>" spelling, so pre-existing scripts keep working.
+// Returned pointer has the lifetime of a static buffer per name slot.
+const char* env(const char* name);
+
+} // namespace cne
