@@ -128,6 +128,9 @@ SpecStats spec_mtp_generate(llama_model* model,
             common_speculative_draft(spec.get());
             stats.draft_s += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - t_draft0).count();
+            if (getenv("CNE_MTP_DEBUG"))
+                fprintf(stderr, "[mtp-dbg] drafted %zu tokens this call\n",
+                        draft.size());
 
             if (!draft.empty() && use_ckpt_tgt)
                 ckpt.update_tgt(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -144,6 +147,8 @@ SpecStats spec_mtp_generate(llama_model* model,
         common_batch_add(batch_tgt, id_last, n_past++, { 0 }, true);
         for (size_t i = 0; i < draft.size(); ++i)
             common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+        if (getenv("CNE_MTP_DEBUG"))
+            fprintf(stderr, "[mtp-dbg] verify %zu draft rows\n", draft.size());
 
         auto t_verify0 = std::chrono::steady_clock::now();
         if (llama_decode(ctx, batch_tgt)) {

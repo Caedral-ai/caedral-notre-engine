@@ -23,6 +23,7 @@ struct SpecStats {
     double process_s = 0;
     double verify_s  = 0;
     long   iterations = 0;
+    long   partials    = 0;   // rounds with a rejected draft (checkpoint replay)
 };
 
 // Size the target context's output buffers for verify batches of up to

@@ -434,8 +434,9 @@ int main(int argc, char** argv) {
         produced += stats.produced;
         fprintf(stderr,
                 "[mtp] iterations=%ld drafted=%ld accepted=%ld (%.1f%%) "
-                "produced=%d\n",
+                "partials=%ld produced=%d\n",
                 stats.iterations, stats.drafted, stats.accepted,
+                stats.partials,
                 stats.drafted ? 100.0 * stats.accepted / stats.drafted : 0.0,
                 stats.produced);
         double spec_wall = stats.draft_s + stats.process_s + stats.verify_s;
