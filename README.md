@@ -149,6 +149,7 @@ tools/                     drivers & probes:
 tests/                     unit tests mirroring core areas
 third_party/               llama.cpp (pinned upstream submodule)
 docs/models/               per-model notes bound to specific artifacts
+docs/FEATURES.md           feature guide: what exists, when to use it
 ```
 
 ## Quick start
