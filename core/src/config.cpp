@@ -1,20 +1,32 @@
 #include "cne/config.h"
 
-#include <cstdio>
-#include <cstring>
+#include <cstdlib>
+#include <map>
+#include <string>
 
 namespace cne {
 
+// Runtime knob lookup: reads "CNE_<name>" first and falls back to the
+// legacy "SOE_<name>" spelling, so pre-existing scripts keep working.
+// Resolved values are cached per name; returned pointers stay valid.
 const char* env(const char* name) {
-    static char buf[2][128];   // two slots: callers may hold two names at once
-    static int slot = 0;
-    slot ^= 1;
-    snprintf(buf[slot], sizeof(buf[slot]), "CNE_%s", name);
-    const char* v = getenv(buf[slot]);
-    if (v)
-        return v;
-    snprintf(buf[slot], sizeof(buf[slot]), "SOE_%s", name);
-    return getenv(buf[slot]);
+    static std::map<std::string, std::string> resolved;
+
+    std::string key = std::string("CNE_") + name;
+    auto it = resolved.find(key);
+    if (it != resolved.end())
+        return it->second.empty() ? nullptr : it->second.c_str();
+
+    const char* v = getenv(key.c_str());
+    if (!v) {
+        std::string legacy = std::string("SOE_") + name;
+        v = getenv(legacy.c_str());
+        key = legacy;
+    }
+    if (!v)
+        return nullptr;
+    resolved[key] = v;
+    return resolved[key].c_str();
 }
 
 } // namespace cne

@@ -5,18 +5,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(SOE_BUILD_TESTS "Build test suite" ON)
-option(SOE_BUILD_SERVER "Build cne-server" OFF)
-option(SOE_BUILD_CLI "Build CLI tools" OFF)
-option(SOE_BUILD_TOOLS "Build developer tools (graph probe)" ON)
-option(SOE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
+option(CNE_BUILD_TESTS "Build test suite" ON)
+option(CNE_BUILD_SERVER "Build cne-server" OFF)
+option(CNE_BUILD_CLI "Build CLI tools" OFF)
+option(CNE_BUILD_TOOLS "Build developer tools (graph probe)" ON)
+option(CNE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
 
 add_library(cne INTERFACE)
 target_include_directories(cne INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 
 add_subdirectory(core/src)
 
-if(SOE_WITH_LLAMA)
+if(CNE_WITH_LLAMA)
     # Pinned upstream (see third_party/llama.cpp). Build only libllama:
     # no examples, tests, server or UI. Fork discipline: product logic
     # never goes inside this subproject.
@@ -34,19 +34,19 @@ if(SOE_WITH_LLAMA)
     add_subdirectory(adapters)
 endif()
 
-if(SOE_BUILD_TESTS)
+if(CNE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
 
-if(SOE_BUILD_TOOLS)
+if(CNE_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if(SOE_BUILD_SERVER)
+if(CNE_BUILD_SERVER)
     add_subdirectory(server)
 endif()
 
-if(SOE_BUILD_CLI)
+if(CNE_BUILD_CLI)
     add_subdirectory(cli)
 endif()

@@ -1,5 +1,5 @@
-// Demand-serving runtime implementation. Extracted VERBATIM from
-// tools/streaming-bench.cpp (R1 / P6a): router-harvest callback, expert
+// Demand-serving runtime implementation. Extracted from
+// tools/streaming-bench.cpp: router-harvest callback, expert
 // windows, slice fills, L2 conditional execution, prefetch overlap,
 // anon-dense binding, audit/dump instrumentation. Single-decode assumption.
 #include "cne_stream_cb.h"
@@ -258,7 +258,7 @@ void ensure_window(const char* name, ggml_tensor* w) {
             win.base = mmap(nullptr, ti.bytes_total, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
             if (win.base == MAP_FAILED) {
-                fprintf(stderr, "[streaming-bench] window mmap FAILED for %s\n", name);
+                fprintf(stderr, "[cne-bench] window mmap FAILED for %s\n", name);
                 exit(1);
             }
             g.windows[name] = win;
@@ -324,7 +324,7 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
 
             // Rank-aware conditional execution (L2 knob): walk the ranked ids
             // ascending, accumulate normalized probability mass over the USED
-            // experts, drop every rank past SOE_EXPERT_MASS (min floor kept).
+            // experts, drop every rank past the mass threshold (min floor kept).
             // Dropped ids are excluded from the fill list so their window slices
             // stay zero - dropped experts contribute exactly nothing. No writes
             // into graph-pool memory happen anywhere in this flow: pool slots
@@ -491,7 +491,7 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
         if (!win.rebound && w->data != win.base) {
             w->data = win.base;
             win.rebound = true;
-            fprintf(stderr, "[bench] rebound %s\n", w->name);
+            fprintf(stderr, "[cne] rebound %s\n", w->name);
         }
 
         g_audit[w] = {w->name, v, g.step, win.ti->bytes_per_expert};

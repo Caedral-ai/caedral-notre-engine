@@ -51,7 +51,7 @@ the engine generates multiple tokens per forward pass:
 - Community-reported speedup: 1.4–2.2× on Qwen3.6 family
 - **Lossless by mathematical proof**: every draft token is verified against
   the full model; accepted tokens are identical to non-speculative inference
-- Enable via env: `SOE_MTP=1` in our bench
+- Enable via env: `CNE_MTP=1` (legacy `SOE_MTP` accepted) in our bench
 
 No quality trade-off needed — MTP gives speed without changing any weight or computation result.
 

@@ -1,13 +1,15 @@
 # Caedral Notre Engine (cne)
 
-**Streaming of Experts engine**: run Mixture-of-Experts models whose GGUF file is
-larger than available RAM, by streaming expert weights from NVMe/flash on demand —
-losslessly, with explicit memory budgets and predictable behavior.
+**A MoE inference engine for low-RAM, CPU-only machines.** Run
+Mixture-of-Experts models that don't fit in memory by letting the engine pick
+and combine the right optimizations for your hardware and model: expert
+streaming from NVMe/flash, dense-residency policies, speculative decoding,
+memory budgets — losslessly by default, with predictable behavior.
 
-Built on top of `llama.cpp` as the inference runtime; residency policy and expert
-I/O live in a dedicated layer outside of it.
+Built on top of `llama.cpp` as the inference runtime; the residency policy,
+feature selection and expert I/O live in a dedicated layer outside of it.
 
-> Status: **pre-alpha / project bootstrap.**
+> Status: **pre-alpha.**
 
 ## Why
 
@@ -21,8 +23,30 @@ toward **democratizing local AI**: private, censorship-resistant,
 subscription-free inference on ordinary laptops, mini-PCs and edge devices —
 your model, your data, your machine.
 
+## How it works
 
-## Architecture (target)
+At load time the engine classifies the situation into a memory regime
+(model size vs available RAM) and activates features accordingly:
+
+| Regime | Model vs RAM | What the engine does |
+|---|---|---|
+| R0 | model ≪ RAM | reports that plain llama.cpp is the better tool |
+| R1 | model ≈ RAM | anon-dense weights + budget enforcement |
+| R2 | model 1–4× RAM | expert cache + streaming + speculation |
+| R3 | model 4–8× RAM | full streaming pipeline |
+| R4 | > 8× RAM | everything on, aggressive (opt-in) compression |
+
+Core principles:
+
+- **Lossless by default** — nothing changes the model's math silently;
+  quality-affecting modes are explicit opt-in flags.
+- **Explicit memory budget** — dense anon + expert cache + KV + staging ≤
+  RAM budget; the page cache is never the line of defense.
+- **Metadata-driven** — no hardcoded layouts, axes, quant types or offsets;
+  all geometry comes from each loaded artifact's manifest.
+- **Fail closed** — incomplete discovery aborts; errors are never swallowed.
+
+## Architecture
 
 ```
 Client (OpenAI SDK / Open WebUI / n8n)
@@ -30,81 +54,61 @@ Client (OpenAI SDK / Open WebUI / n8n)
         ▼
     cne-server ── auth · quotas · sessions · scheduler
         ▼
-    cne-runtime ── llama.cpp context + router observer
+    cne-runtime ── regime classifier → feature activation
         ▼                     ▼
-  Memory manager         Expert I/O pipeline
-  dense/KV/budget        O_DIRECT · N lanes · overlap
+  Memory manager         Feature modules
+  budgets/regimes        streaming · speculation · precision
         ▼                     ▼
-       Expert LRU cache (shared per model)
-                    ▼
-            NVMe / Flash (GGUF shards)
+     Expert LRU cache  ←  O_DIRECT I/O lanes
+                     ▼
+             NVMe / Flash (GGUF shards)
 ```
-
-Core principles:
-
-- **Lossless by default** — streaming never changes the math; identity gates
-  (`stream ON == OFF`, token-exact) block every release.
-- **Explicit memory budget** — dense anon + expert LRU + KV + staging ≤ RAM budget;
-  page cache is never the line of defense.
-- **Metadata-driven** — no hardcoded layouts, axes, quant types or offsets.
-- **O_DIRECT first-class** for expert misses, bounce buffers for misaligned slices.
-- **Overlap** I/O and compute across layers (N+1 window) to hide flash latency.
-- **Fork discipline** — the llama.cpp fork carries only the minimal expert-ready
-  hook; all product logic lives outside it.
 
 ## Repository layout
 
 ```
-core/include/cne/   public headers (config, model, cache, io, metrics…)
-core/src/           implementation: gguf/, moe/, cache/, io/, memory/,
-                    runtime/, metrics/
-adapters/           llama.cpp adapter + platform-specific code
-server/             cne-server: HTTP, OpenAI-compatible API, scheduler
-cli/                command-line interface
-tools/              inspection & benchmarking utilities
-tests/              correctness/ gguf/ cache/ io/ memory/ server/
-third_party/        llama.cpp (upstream submodule)
+core/include/cne/          public headers (model, memory, config…)
+core/src/gguf/             GGUF reader, tensor classification, registry
+core/src/memory/           memory budgets + regime classification
+core/src/features/         feature implementations (streaming/ today,
+                           speculation & precision landing next)
+adapters/                  llama.cpp seam: demand-serving runtime +
+                           draft-MTP speculative decoding
+server/                    cne-server: HTTP, OpenAI-compatible API (planned)
+cli/                       command-line interface (planned)
+tools/                     measurement drivers & probes (cne-bench,
+                           cne-prepare, identity gate, …)
+tests/                     mirrors core areas
+third_party/               llama.cpp (pinned upstream submodule)
 ```
-
 
 ## When streaming helps
 
-The stream delivers meaningful speedup only when the model is **at least 1.6×
-the available RAM** (regime R3). Below that threshold, plain mmap inference
-performs equally well or better because the OS page cache already does the
-job. The regime classifier reports which situation you are in at load time.
-
-## When the stream helps
-
-The stream delivers meaningful speedup only when the model is **at least 1.6×
-the available RAM** (regime R3). Below that threshold, plain mmap inference
-performs equally well or better. The regime classifier reports which situation
-you are in at load time.
+Expert streaming delivers meaningful speedup only when the model is
+meaningfully larger than available RAM. Below that threshold plain mmap
+inference performs equally well or better because the OS page cache already
+does the job — and even then, streaming's first-order value is a stable RSS
+envelope and fault-free operation rather than raw velocity. The regime
+classifier reports which situation you are in at load time and deactivates
+streaming when it doesn't pay.
 
 ## Supported models
 
-First target — streaming in regime R3 (model ≫ RAM):
+First target:
 
 | Model | Quant | Source file | Size |
 |---|---|---|---|
-| [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | UD-Q4_K_XL + MTP | [`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | ~22.4 GiB |
+| [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | UD-Q4_K_XL, MTP tensors preserved | [`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | ~22.9 GB |
 
 ```sh
 ./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
-# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.9 GB)
-# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned, runtime artifact)
+# → models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.9 GB)
+# → models/qwen3.6-35b-a3b-q4_k_xl-mtp/...-prepared.gguf (4096-aligned runtime artifact)
 ```
 
-MTP speculative decoding is **lossless**: every draft token is verified
-against the full model, so output is identical to non-speculative inference —
-just faster.
-
-The prepared file is the runtime artifact: all expert tensors 4096-aligned
-for O_DIRECT streaming. The unaligned download can be deleted after the
-gate passes.
-
-Chosen because its Q8 GGUF far exceeds typical desktop RAM while the 3B active
-parameters keep CPU compute tractable.
+The prepared file is the runtime artifact: all expert tensors are
+4096-aligned for O_DIRECT reads. The unaligned download can be deleted once
+the correctness gates pass on the prepared file.
 
 ### Quality
 
@@ -114,16 +118,21 @@ for quality-per-byte: attention and shared-expert weights stay at higher
 precision; only routed experts are q4_k. In practice, chat / coding /
 reasoning quality is indistinguishable from full precision.
 
-## Building
+MTP speculative decoding is **lossless**: every draft token is verified
+against the full model over the full vocabulary, so accepted output is what
+the target model would have produced anyway — just faster.
 
-Not yet functional — bootstrap phase. Planned:
+## Building
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-`third_party/llama.cpp` will be pinned as an upstream-patched submodule.
+Main artifacts: `build/tools/cne_streaming_bench` (measurement driver),
+`build/tools/cne_prepare` (GGUF alignment tool). `third_party/llama.cpp` is
+pinned as an upstream submodule; `common` is linked by tools for speculative
+decoding, never by the product core.
 
 ## References
 

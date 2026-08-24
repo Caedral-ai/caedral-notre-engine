@@ -1,9 +1,9 @@
-// streaming-bench: end-to-end measurement of demand-served expert streaming.
+// cne-bench: end-to-end measurement of demand-served expert streaming.
 // Full greedy generation with SliceCache filling slices at the callback
 // ask-point. Reports tok/s, hit-rate, cold MiB/step, evictions - comparable
 // against offline LRU simulation curves.
 //
-// R1: the demand-serving RUNTIME lives in adapters/stream_cb.cpp behind the
+// The demand-serving runtime lives in adapters/stream_cb.cpp behind the
 // cne_stream_cb.h API; this file is only a measurement driver.
 #include "cne/cache.h"
 #include "cne/io_scheduler.h"
@@ -76,9 +76,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Dense policy: explicit env wins; otherwise AUTO from detected regime -
-    // R2+ (model well above available RAM) prefers anon-dense (fault-free),
-    // smaller regimes stay mmap (nothing to protect from reclaim).
+    // Dense policy: explicit env wins; otherwise AUTO from the detected
+    // memory regime - when the model is well above available RAM, anon-dense
+    // residency avoids page-fault storms; smaller models stay on mmap.
     DensePolicy g_dense = DensePolicy::MMAP;
     {
         const char* dp = cne::env("DENSE");
@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
         l2_mass = (float)atof(cne::env("EXPERT_MASS"));
         l2_min_k = cne::env("EXPERT_MIN_K") ? atoi(cne::env("EXPERT_MIN_K")) : 2;
         if (l2_mass <= 0.0f || l2_mass > 1.0f) {
-            fprintf(stderr, "[L2] invalid SOE_EXPERT_MASS - knob disabled\n");
+            fprintf(stderr, "[L2] invalid CNE_EXPERT_MASS (or legacy SOE_EXPERT_MASS) - knob disabled\n");
             l2_mass = 0.0f;
         } else {
             printf("*** [L2] ACTIVE: expert-mass=%.2f min_k=%d "
@@ -147,8 +147,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Prefetch overlap: measured-dead on this hardware/model (P4a/P5d);
-    // kept flag-gated for future capacity-pressure regimes.
+    // Prefetch overlap: measured as a no-op or regression on this
+    // hardware/model (adequate caching already captures cross-token routing
+    // locality, and the prefetcher contends with demand fills on the cache
+    // mutex); kept flag-gated for future capacity-pressure regimes.
     cne::PfMode pf_mode = cne::PfMode::OFF;
     {
         const char* pf = cne::env("PREFETCH");
@@ -216,7 +218,7 @@ int main(int argc, char** argv) {
     cparams.n_threads_batch  = 8;
     cparams.cb_eval          = cne::stream_cb_eval();
     cparams.cb_eval_user_data = nullptr;
-    // MTP speculative decoding (SOE_MTP): 1 = default draft depth, N = depth.
+    // MTP speculative decoding (CNE_MTP): 1 = default draft depth, N = depth.
     // The target context stays LLAMA_CONTEXT_TYPE_DEFAULT - the MTP context
     // type builds graph_mtp (nextn block alone) and belongs on the DRAFT
     // context, which common_speculative_init_from_params creates for us.
@@ -234,9 +236,10 @@ int main(int argc, char** argv) {
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
-    // E7: warmup-off is mandatory for big models - EXCEPT when probing the
-    // MTP path: upstream's harness keeps warmup on, and the nextn-augmented
-    // graph may need shaped buffers before real decodes (bisect knob).
+    // Warmup runs must stay off for models near or above RAM size: the
+    // dummy-shape decode can page in large weight spans for no benefit.
+    // Exception: MTP probing keeps upstream's warmup-on behavior, since the
+    // nextn-augmented graph may need shaped buffers before real decodes.
     if (!cne::env("MTP"))
         llama_set_warmup(ctx, false);
 

@@ -1,5 +1,5 @@
 // Synthetic-GGUF fixture tests for the parser/registry, plus an optional
-// live check against a real model via SOE_TEST_MODEL (skipped when unset).
+// live check against a real model via CNE_TEST_MODEL (skipped when unset).
 #include "cne/gguf.h"
 #include "cne/model_registry.h"
 
@@ -139,9 +139,9 @@ void test_corrupt_magic_fails_closed() {
 }
 
 void test_live_model_if_available() {
-    const char *env = getenv("SOE_TEST_MODEL");
+    const char *env = getenv("CNE_TEST_MODEL");
     if (!env || !*env) {
-        printf("skip: live model (set SOE_TEST_MODEL)\n");
+        printf("skip: live model (set CNE_TEST_MODEL)\n");
         return;
     }
     ModelRegistry reg;

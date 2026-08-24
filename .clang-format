@@ -1,4 +1,4 @@
-# Formatting style for soe (close to llama.cpp: 4-space, 120 col)
+# Formatting style for cne (close to llama.cpp: 4-space, 120 col)
 BasedOnStyle: LLVM
 Language: Cpp
 Standard: c++17
