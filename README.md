@@ -32,19 +32,44 @@ close that gap without changing what the model computes.
 ## The concept: one engine, many features, auto-selected
 
 There is no single trick that makes big models fit small machines. What works
-depends on the situation:
+depends on the situation. At load time a **regime classifier** measures the
+machine and inspects the model artifact, then decides which features activate:
 
-| Regime | Model vs available RAM | Engine behavior |
-|---|---|---|
-| R0 | model ≪ RAM | reports that plain `llama.cpp` is the better tool |
-| R1 | model ≈ RAM | anon-dense weight residency + budget enforcement |
-| R2 | model 1–4× RAM | expert cache + NVMe streaming (+ speculation) |
-| R3 | model 4–8× RAM | full streaming pipeline |
-| R4 | > 8× RAM | everything on; aggressive compression is the only way |
+| Regime | Model vs available RAM | Streaming | Speculation | Residency & budget |
+|---|---|---|---|---|
+| R0 | model much smaller than RAM | **off** — the OS page cache already delivers every byte; streaming can only add overhead | available (same math as upstream) | plain mmap; the engine stays out of the way |
+| R1 | model about equal to RAM | **off** — page cache is competitive at this ratio | on when measured to pay | anon-dense weights: fault-free decode where vanilla mmap thrashes |
+| R2 | model 1-4x RAM | **on** — expert cache absorbs routing locality; misses stream from NVMe | on when measured to pay | budgets enforced; anon dense above the thrash line |
+| R3 | model 4-8x RAM | **on** — the core regime; most experts cannot stay resident | on when measured to pay | full budget enforcement |
+| R4 | model over 8x RAM | **on** — streaming is the only way to run at all | on; aggressive (opt-in) compression becomes the deciding lever | tightest budgets |
 
-At load time a **regime classifier** measures the machine and inspects the
-model artifact, then decides which features activate. Users state intent;
-the engine resolves settings:
+**When speculation makes sense.** Drafting only pays if the accepted tokens
+per verify pass outweigh the extra draft plus batched-verify compute. The
+engine enables it per regime and measures acceptance live; where it does not
+pay (small models, low-acceptance domains, or CPUs where batched matmuls
+cost more than sequential ones), it deactivates automatically instead of
+guessing.
+
+**When streaming makes sense.** Below roughly 1.6x model-to-RAM ratio the
+page cache does the same job for free, so streaming stays off. From R2
+upward the cache-plus-stream pipeline wins on stability (orders of magnitude
+fewer page faults) and, as the ratio grows, on velocity.
+
+### The guarantee: never worse than llama.cpp
+
+The engine's floor is parity with plain `llama.cpp` on the same artifact:
+
+- output is **identical by default** (lossless contract, verified by
+  token-exact identity gates), and
+- any feature that does not measurably help on the detected hardware/model
+  pair is **deactivated**, so overhead never accumulates where there is no
+  value.
+
+In practice: equal quality everywhere, equal-or-better velocity, and
+strictly better behavior — bounded memory, no fault storms — exactly where
+the model pushes against the machine's limits.
+
+Users state intent; the engine resolves settings:
 
 ```json
 { "quality": "lossless" }   // or "balanced" | "fast"  (planned)
@@ -68,6 +93,9 @@ measurement (`CNE_*`, see below) — but they are knobs, not the interface.
 
 ## Principles
 
+- **Never worse than llama.cpp.** Parity is the floor: identical output by
+  default, and any feature that does not pay on the detected hardware/model
+  pair is switched off.
 - **Lossless by default.** Nothing changes the model's math silently.
   Quality-affecting modes exist only behind explicit opt-in flags.
 - **Explicit memory budget.** Dense weights + expert cache + KV + staging ≤
