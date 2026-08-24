@@ -227,6 +227,9 @@ int main(int argc, char** argv) {
         cparams.type_k = GGML_TYPE_Q8_0;
         cparams.type_v = GGML_TYPE_Q8_0;
     }
+    cparams.flash_attn_type =
+        cne::env("FA") ? LLAMA_FLASH_ATTN_TYPE_ENABLED
+                       : LLAMA_FLASH_ATTN_TYPE_AUTO;
     cparams.cb_eval          = cne::stream_cb_eval();
     cparams.cb_eval_user_data = nullptr;
     // MTP speculative decoding (CNE_MTP): 1 = default draft depth, N = depth.
