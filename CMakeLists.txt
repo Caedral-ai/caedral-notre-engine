@@ -26,7 +26,10 @@ if(SOE_WITH_LLAMA)
     set(LLAMA_BUILD_SERVER   OFF)
     set(LLAMA_BUILD_APP      OFF)
     set(LLAMA_BUILD_UI       OFF)
-    set(LLAMA_BUILD_COMMON   OFF)
+    # `common` is needed by tools that wire upstream speculative decoding
+    # (common_speculative draft-mtp). Library-only discipline for the product
+    # core is unchanged: soe_core/soe_adapter never link it.
+    set(LLAMA_BUILD_COMMON   ON)
     add_subdirectory(third_party/llama.cpp)
     add_subdirectory(adapters)
 endif()

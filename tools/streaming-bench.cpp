@@ -13,6 +13,11 @@
 
 #include "llama.h"
 
+// MTP speculative decoding (SOE_MTP): upstream draft-mtp implementation.
+#include "common.h"
+#include "sampling.h"
+#include "speculative.h"
+
 #include <sys/mman.h>
 
 #include <algorithm>
@@ -724,19 +729,37 @@ int main(int argc, char** argv) {
     cparams.n_threads_batch  = 8;
     cparams.cb_eval          = cb_eval;
     cparams.cb_eval_user_data = nullptr;
-    // NOTE: LLAMA_CONTEXT_TYPE_MTP belongs on the DRAFT context only - it
-    // builds graph_mtp (nextn block alone). On the target it replaces the
-    // full decoder graph, so sampling reads 1-layer draft logits and output
-    // degenerates into repetition loops (observed 2026-08-24). Target stays
-    // DEFAULT; the MTP draft loop arrives with common_speculative wiring.
-    if (getenv("SOE_MTP"))
-        fprintf(stderr,
-                "[bench] SOE_MTP set: load_mtp=true (nextn tensors resident, "
-                "draft graph NOT wired yet - no speedup expected)\n");
+    // Debug knob: run stock decode without the callback (bisects callback
+    // interference from engine behaviour).
+    if (getenv("SOE_NO_CB")) {
+        cparams.cb_eval = nullptr;
+        fprintf(stderr, "[bench] SOE_NO_CB: running without cb_eval\n");
+    }
+    // MTP speculative decoding (SOE_MTP): 1 = default draft depth, N = depth.
+    // The target context stays LLAMA_CONTEXT_TYPE_DEFAULT - the MTP context
+    // type builds graph_mtp (nextn block alone) and belongs on the DRAFT
+    // context, which common_speculative_init_from_params creates for us.
+    int mtp_k = 0;
+    if (getenv("SOE_MTP")) {
+        mtp_k = atoi(getenv("SOE_MTP"));
+        if (mtp_k == 1) mtp_k = 4;   // sane CPU default depth
+        if (mtp_k < 0) mtp_k = 0;
+    }
+    if (mtp_k > 0) {
+        auto lim = common_speculative_get_output_limits((int)cparams.n_batch, 1, mtp_k);
+        cparams.n_outputs_max      = (uint32_t)lim.total;
+        cparams.n_outputs_max_per_seq = (uint32_t)lim.per_seq;
+        fprintf(stderr, "[mtp] draft-mtp enabled: n_max=%d n_outputs_max=%u\n",
+                mtp_k, cparams.n_outputs_max);
+    }
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) { fprintf(stderr, "[streaming-bench] CONTEXT FAILED\n"); return 1; }
-    llama_set_warmup(ctx, false);
+    // E7: warmup-off is mandatory for big models - EXCEPT when probing the
+    // MTP path: upstream's harness keeps warmup on, and the nextn-augmented
+    // graph may need shaped buffers before real decodes (bisect knob).
+    if (!getenv("SOE_MTP"))
+        llama_set_warmup(ctx, false);
 
     // ANON policy: one scan decode binds every dense weight to anon memory,
     // then memory is cleared so generation state is pristine.
@@ -837,7 +860,23 @@ int main(int argc, char** argv) {
     }
     toks.resize(n_tok);
     printf("prefill tokens: %d (n_ctx %d)\n", n_tok, (int)cparams.n_ctx);
-    if (llama_decode(ctx, llama_batch_get_one(toks.data(), n_tok))) {
+    if (mtp_k > 0) {
+        // MTP path below does its own two-phase prefill (n-1 tokens, then
+        // the last token together with the first verify batch).
+    } else if (getenv("SOE_SPLIT_PREFILL")) {
+        // Bisect knob: same two-phase prefill shape as the MTP path
+        // (n-1 tokens, then 1) WITHOUT any speculation.
+        llama_batch bp = llama_batch_init(n_tok > 1 ? (size_t)(n_tok - 1) : 1, 0, 1);
+        for (int i = 0; i + 1 < n_tok; i++)
+            common_batch_add(bp, toks[i], i, { 0 }, false);
+        if (llama_decode(ctx, bp)) { fprintf(stderr, "[streaming-bench] PREFILL FAILED\n"); return 1; }
+        llama_batch_free(bp);
+        llama_token il = toks.back();
+        if (llama_decode(ctx, llama_batch_get_one(&il, 1))) {
+            fprintf(stderr, "[streaming-bench] PREFILL FAILED\n");
+            return 1;
+        }
+    } else if (llama_decode(ctx, llama_batch_get_one(toks.data(), n_tok))) {
         fprintf(stderr, "[streaming-bench] PREFILL FAILED\n");
         return 1;
     }
@@ -852,6 +891,7 @@ int main(int argc, char** argv) {
     auto t0 = Clock::now();
     printf("tokens:");
     int produced = 0;
+    long mtp_drafted = 0, mtp_accepted = 0;
     const int dump_every =
         getenv("SOE_DUMP_LOGITS_EVERY") ? atoi(getenv("SOE_DUMP_LOGITS_EVERY")) : 1;
     auto dump_logits = [&](int tag) {
@@ -865,6 +905,7 @@ int main(int argc, char** argv) {
         if (lf) { fwrite(lg, sizeof(float), nv, lf); fclose(lf); }
     };
     for (int i = 0; i < n_gen; i++) {
+        if (mtp_k > 0) break;   // MTP path below owns generation
         llama_token id = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, id)) break;
         printf(" %d", id);
@@ -894,6 +935,175 @@ int main(int argc, char** argv) {
         g_step_ids[g_id_slot].clear();
         g_looked.clear();
         g_looked_step = -1;
+    }
+
+    // ---- MTP speculative decoding path (draft-mtp, greedy) ----
+    // Mirrors examples/speculative-simple: draft k tokens with the nextn
+    // head, verify them in one batched target forward. Every accepted token
+    // is verified against the full model - lossless by construction.
+    if (mtp_k > 0) {
+        common_init();
+
+        common_params spec_params;
+        spec_params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+        spec_params.speculative.draft.n_max = mtp_k;
+        spec_params.sampling.temp = 0.0f;   // greedy acceptance
+        spec_params.cb_eval = cb_eval;      // demand-serving in the draft graph too
+        // D13 consistency: both contexts must see the SAME weight buffers.
+        // A draft ctx with extra_bufts would CPU_REPACK the shared q4_K
+        // model weights, silently switching kernels for the target too.
+        spec_params.no_extra_bufts = true;
+
+        auto spec_init = common_speculative_init_from_params(spec_params, model, ctx);
+        if (!spec_init || !spec_init->context()) {
+            fprintf(stderr, "\n[streaming-bench] MTP DRAFT CONTEXT FAILED\n");
+            return 1;
+        }
+        spec_params.speculative.draft.ctx_tgt = ctx;
+        spec_params.speculative.draft.ctx_dft = spec_init->context();
+        llama_context* ctx_dft = spec_params.speculative.draft.ctx_dft;
+
+        std::unique_ptr<common_speculative, decltype(&common_speculative_free)>
+            spec(common_speculative_init(spec_params.speculative, 1),
+                 &common_speculative_free);
+        if (!spec) {
+            fprintf(stderr, "\n[streaming-bench] SPECULATOR INIT FAILED\n");
+            return 1;
+        }
+
+        // prompt through the target (all but last token), then to speculator
+        llama_batch batch_prompt = llama_batch_init(n_tok > 1 ? (size_t)(n_tok - 1) : 1, 0, 1);
+        for (int i = 0; i + 1 < n_tok; i++)
+            common_batch_add(batch_prompt, toks[i], i, { 0 }, false);
+        if (llama_decode(ctx, batch_prompt)) {
+            fprintf(stderr, "\n[streaming-bench] PREFILL FAILED (mtp)\n");
+            return 1;
+        }
+        if (n_tok > 1 && !common_speculative_process(spec.get(), batch_prompt)) {
+            fprintf(stderr, "\n[streaming-bench] SPEC PROMPT PROCESS FAILED\n");
+            return 1;
+        }
+        llama_batch_free(batch_prompt);
+
+        llama_token id_last = toks.back();
+        std::vector<llama_token> prompt_tgt(toks.begin(), toks.end() - 1);
+        int n_past = n_tok - 1;
+
+        common_speculative_begin(spec.get(), 0, prompt_tgt);
+
+        const bool use_ckpt_tgt =
+            common_context_can_seq_rm(ctx) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        const bool use_ckpt_dft =
+            common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        common_prompt_checkpoint ckpt;
+
+        // Bisect knob: keep all MTP machinery but never draft - isolates
+        // the nextn-augmented target graph from draft/verify batching.
+        const bool no_draft = getenv("SOE_MTP_NODRAFT") != nullptr;
+
+        common_sampler_ptr smpl_mtp(common_sampler_init(model, spec_params.sampling));
+        llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx), 0, 1);
+        std::vector<llama_token> draft;
+
+        while (produced < n_gen) {
+            if (draft.empty()) {
+                if (!no_draft) {
+                ckpt.update_pos(
+                        prompt_tgt.size(),
+                        llama_memory_seq_pos_min(llama_get_memory(ctx), 0),
+                        llama_memory_seq_pos_max(llama_get_memory(ctx), 0));
+                if (use_ckpt_dft)
+                    ckpt.update_dft(ctx_dft, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                int n_draft_max = (int) llama_n_ctx(ctx) - n_past - 2;
+                n_draft_max = std::min(n_draft_max, n_gen - produced - 1);
+                n_draft_max = std::max(n_draft_max, 0);
+
+                common_speculative_get_draft_params(spec.get(), 0) = {
+                    /* .drafting = */ true,
+                    /* .n_max    = */ n_draft_max,
+                    /* .n_past   = */ n_past,
+                    /* .id_last  = */ id_last,
+                    /* .prompt   = */ &prompt_tgt,
+                    /* .result   = */ &draft,
+                };
+                common_speculative_draft(spec.get());
+                }
+
+                if (!draft.empty() && use_ckpt_tgt)
+                    ckpt.update_tgt(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                if (ctx_dft) {
+                    if (use_ckpt_dft)
+                        ckpt.load_dft(ctx_dft, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft), 0, ckpt.pos_max + 1, -1);
+                }
+            }
+
+            common_batch_clear(batch_tgt);
+            common_batch_add(batch_tgt, id_last, n_past++, { 0 }, true);
+            for (size_t i2 = 0; i2 < draft.size(); ++i2)
+                common_batch_add(batch_tgt, draft[i2], n_past + i2, { 0 }, true);
+
+            if (llama_decode(ctx, batch_tgt)) {
+                fprintf(stderr, "\n[streaming-bench] DECODE FAILED (mtp verify)\n");
+                return 1;
+            }
+            if (!common_speculative_process(spec.get(), batch_tgt)) {
+                fprintf(stderr, "\n[streaming-bench] SPEC PROCESS FAILED\n");
+                break;
+            }
+
+            common_sampler_ptr smpl_save;
+            if (use_ckpt_tgt)
+                smpl_save.reset(common_sampler_clone(smpl_mtp.get()));
+
+            const size_t n_draft = draft.size();
+            auto ids = common_sampler_sample_and_accept_n(smpl_mtp.get(), ctx, draft);
+            GGML_ASSERT(!ids.empty());
+
+            if (use_ckpt_tgt && ids.size() - 1 < n_draft) {
+                draft = std::move(ids);
+                ckpt.load_tgt(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                llama_memory_seq_rm(llama_get_memory(ctx), 0, ckpt.pos_max + 1, -1);
+                if (ctx_dft) {
+                    ckpt.load_dft(ctx_dft, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft), 0, ckpt.pos_max + 1, -1);
+                }
+                prompt_tgt.resize(ckpt.n_tokens);
+                smpl_mtp = std::move(smpl_save);
+                n_past = (int) prompt_tgt.size();
+                continue;
+            }
+
+            common_speculative_accept(spec.get(), 0, ids.size() - 1);
+            n_past       += (int) ids.size() - 1;
+            mtp_drafted  += (long) n_draft;
+            mtp_accepted += (long) ids.size() - 1;
+
+            bool stop = false;
+            for (size_t i2 = 0; i2 < ids.size(); ++i2) {
+                prompt_tgt.push_back(id_last);
+                id_last = ids[i2];
+                g.step++;
+                if (llama_vocab_is_eog(vocab, id_last)) { stop = true; break; }
+                printf(" %d", id_last);
+                fflush(stdout);
+                produced++;
+            }
+            if (stop) break;
+
+            // trim rejected draft tokens from both memories - without this,
+            // stale positions poison every subsequent decode (GDN included)
+            draft.clear();
+            llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1);
+            if (ctx_dft)
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), 0, n_past, -1);
+        }
+        llama_batch_free(batch_tgt);
+        fprintf(stderr, "[mtp] drafted=%ld accepted=%ld (%.1f%%)\n",
+                mtp_drafted, mtp_accepted,
+                mtp_drafted ? 100.0 * mtp_accepted / mtp_drafted : 0.0);
     }
 
     // stop the prefetcher before tearing down cache/windows
