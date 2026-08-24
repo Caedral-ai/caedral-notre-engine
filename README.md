@@ -87,15 +87,17 @@ First target — streaming in regime R3 (model ≫ RAM):
 
 | Model | Quant | Source file | Size |
 |---|---|---|---|
-| [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | Q8_0 | [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | ~34.4 GiB |
+| [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) (MoE, 3B active) | UD-Q4_K_XL + MTP | [`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | ~22.4 GiB |
 
 ```sh
-./tools/download-model.sh
-# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf (~22.4 GB)
-
-./build/tools/soe_prepare models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
-# → .../Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned, runtime artifact)
+./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
+# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf          (~22.9 GB)
+# → models/qwen3.6-35b-a3b-q4_k_xl/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf (aligned, runtime artifact)
 ```
+
+MTP speculative decoding is **lossless**: every draft token is verified
+against the full model, so output is identical to non-speculative inference —
+just faster.
 
 The prepared file is the runtime artifact: all expert tensors 4096-aligned
 for O_DIRECT streaming. The unaligned download can be deleted after the
