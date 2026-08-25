@@ -63,7 +63,10 @@ per verify pass outweigh the extra draft plus batched-verify compute. The
 engine enables it per regime and measures acceptance live; where it does not
 pay (small models, low-acceptance domains, or CPUs where batched matmuls
 cost more than sequential ones), it deactivates automatically instead of
-guessing.
+guessing. Streaming adds one more condition: verify blocks touch several
+draft positions' experts at once, so under cache pressure speculation turns
+into wasted NVMe fills — **below ~90% expert-cache hit-rate, MTP is a net
+loss and stays off**.
 
 **When streaming makes sense.** Below roughly 1.6× model-to-RAM ratio the
 page cache does the same job for free, so streaming stays off. From R2

@@ -148,6 +148,44 @@ lossless configuration measured on this hardware class.
 **Avoid when:** serving multiple concurrent requests — draft overhead does
 not parallelize as well as plain decode.
 
+**Streaming interaction (measured 2026-08-24 at ~1.4x RAM):** speculation's
+advantage decays as cache hit-rate drops, for three reasons:
+
+1. A verify block needs the union of several draft positions' expert slices
+   resident *simultaneously* — the per-step working set grows with depth,
+   which increases thrash exactly when the cache is smallest relative to
+   demand.
+2. Rejected draft tails waste fills that were already paid for in NVMe time;
+   in compute-bound mode the same waste is only discarded ALU work.
+3. Block-shaped fetches scramble LRU recency ordering, degrading eviction
+   choices under pressure.
+
+Measurement (500 tokens, ctx 1024, k=8 p_min=0.5 t=6): stream 4.52 / 4.44
+tok/s vs naive 4.63 / 4.40 — a −2.4% / −0.9% delta, within run-to-run noise.
+Hit-rate held at 93.9% under block-shaped fetches; fills took 35% of wall
+but overlapped with compute through the I/O lanes; outputs were
+byte-identical across arms; 100% acceptance in all runs.
+
+**Verdict:** MTP shows **little-to-no gain in streaming mode** even at this
+friendly operating point (~1.4× RAM): stream 4.52 / 4.44 tok/s vs naive
+4.63 / 4.40 — at best a wash once noise is accounted for. The mechanism:
+verify blocks need several draft positions' expert slices resident
+simultaneously (bigger per-step working set), rejected draft tails waste
+NVMe fills already paid for, and block-shaped fetches scramble LRU recency.
+
+**Operational rule: below ~90% expert-cache hit-rate, MTP is net-NEGATIVE —
+turn it off** (`CNE_MTP` unset). Fill latency dominates wall time in that
+regime, so every extra slice touched per verify block and every rejected
+draft tail costs real I/O wait that sequential decode would amortize or
+avoid. Above 90%, the cost is bounded (~2%) and acceptable for the +20%
+naive-mode win. A future release will enforce this automatically via the
+regime classifier; until then, watch the `cache hit rate` telemetry line
+and disable MTP manually when it dips under 90%.
+
+Note: long generations need `CNE_CTX=1024` or higher — with MTP active the
+default 256-token context aborts around token ~250 ("failed to find a
+memory slot").
+
 ## 6. Artifact alignment (`cne-prepare`)
 
 **Status:** working · **One-time cost per artifact**
