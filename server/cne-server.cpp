@@ -207,11 +207,24 @@ struct Emitter {
         return piece;
     }
 
-    // Failure path: if think suppression held back EVERYTHING, hand back the
-    // raw output so the user gets text instead of an empty response.
+    // Failure path: if think suppression held back EVERYTHING (generation
+    // truncated while a think block was still open), hand back the text so
+    // the user gets content instead of an empty response - but never the
+    // fake tag structure.
     std::string rescue_all() {
         if (!strip_think || sent > 0 || toks.empty()) return {};
-        return detokenize(toks);
+        std::string raw = detokenize(toks);
+        auto drop = [&](const char* tag) {
+            size_t p;
+            while ((p = raw.find(tag)) != std::string::npos)
+                raw.erase(p, strlen(tag));
+        };
+        drop("<think>");
+        drop("</think>");
+        size_t lead = raw.find_first_not_of("\n \t");
+        if (lead == std::string::npos) return {};
+        raw.erase(0, lead);
+        return raw;
     }
 };
 
