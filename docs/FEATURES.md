@@ -314,13 +314,24 @@ Server-specific knobs:
 | `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
 | `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
+| `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
+
+The server also consumes a confirmed config file written by `cne-setup`
+(`models/server.json`): precedence is environment variable > config file >
+built-in default, and every resolved knob is logged with its source at
+boot. See **docs/SETUP.md**.
 
 Behavior notes:
 
 - Requests serialize (single-decode runtime); a client disconnecting
-  mid-stream stops generation cleanly.
-- Thinking-off uses the Qwen3-family empty-think assistant prefix; on some
-  prompts the model re-opens thinking anyway - the server then flushes raw
-  output with a loud warning rather than returning nothing.
-- Long generations need context headroom: serving defaults to ctx 1024;
-  essays/reasoning-heavy prompts may want `CNE_CTX=4096`.
+  mid-stream stops generation cleanly - the socket is polled for liveness
+  instead of trusting write() alone, so abandoned requests cannot hog the
+  engine slot.
+- Thinking-off uses the Qwen3-family empty-think assistant prefix and is
+  deterministic once active. If a request budget expires while the model
+  is inside a suppressed think block, the response carries an explicit
+  notice instead of reasoning content.
+- Context: prompts are prefilled in batch-sized chunks, so long agent
+  system prompts (several thousand tokens) are safe. Size `ctx` to your
+  workload; context costs ~20 KiB/token on hybrid-attention artifacts,
+  plus KV headroom for generation.
