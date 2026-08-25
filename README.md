@@ -104,7 +104,7 @@ Users state intent; the engine resolves settings:
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%) |
 | Mixed-precision serving | ![](https://img.shields.io/badge/status-designed-blue) | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
-| OpenAI-compatible server | ![](https://img.shields.io/badge/status-planned-lightgrey) | SSE endpoint on top of the extracted runtime |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` on the extracted runtime; single session; MTP-enabled |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -132,9 +132,9 @@ velocity gains and reproduction commands: **[docs/BENCHMARKS.md](docs/BENCHMARKS
 
 ```
 Client (OpenAI SDK / Open WebUI / n8n)
-        │  HTTP/SSE                      (planned)
+        │  HTTP/SSE                      (live via cne-server)
         ▼
-    cne-server ── auth · quotas · sessions · scheduler
+    cne-server ── OpenAI-compatible API (auth/quotas: later)
         ▼
     cne-runtime ── regime classifier → feature activation
         ▼                              ▼
@@ -158,13 +158,16 @@ core/src/memory/           memory budgets + regime classification
 core/src/features/
   streaming/               slice cache · O_DIRECT file · I/O lane scheduler
 adapters/                  llama.cpp seam:
+                             cne_runtime.cpp     shared boot sequence (bench+server)
                              cne_stream_cb.cpp   demand-serving runtime
                              cne_stream_spec.cpp draft-MTP generation loop
+server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
 tools/                     drivers & probes:
                              cne_bench       end-to-end bench
                              cne_prepare     GGUF alignment tool
                              cne_identity_gate  correctness harness
 tests/features/            unit tests mirroring core areas
+tests/runtime/             shared boot-sequence tests
 docs/                      FEATURES.md · per-model notes
 third_party/               llama.cpp (pinned upstream submodule)
 ```
@@ -195,6 +198,26 @@ CNE_LANES=4 ./build/tools/cne_bench \
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
+
+### Serve (OpenAI-compatible)
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON
+cmake --build build --target cne_server -j
+
+# recommended lossless serving config (see docs/BENCHMARKS.md)
+CNE_DENSE=mmap CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6 CNE_FA=1 \
+    ./build/server/cne_server models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf 127.0.0.1 8080
+
+curl http://localhost:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
+```
+
+Single session: requests serialize. Greedy by default (lossless);
+`temperature`/`top_p`/`seed` honored per request. Disable thinking with
+`CNE_THINK=0` or per-request `"chat_template_kwargs":{"enable_thinking":false}`.
+Full endpoint/knob reference in `docs/FEATURES.md` §11.
 
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
@@ -247,7 +270,8 @@ zero dropped slices), and KV q8_0 was rejected as a CPU regression.
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
-5. Runtime hardening → `cne-server` with OpenAI-compatible SSE
+5. `cne-server` with OpenAI-compatible SSE — **single-session serving done**;
+   hardening (auth, quotas, multi-session) next
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`)
 7. Multi-user serving, autotune, packaging
 

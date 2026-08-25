@@ -293,3 +293,34 @@ Whichever features you enable or disable:
    not crashed.
 3. **No silent trade-offs** — anything that changes results prints loud
    telemetry and requires an explicit opt-in variable.
+
+## 11. OpenAI-compatible server (`cne_server`)
+
+**Status:** working (single session) · **Built with:** `-DCNE_BUILD_SERVER=ON`
+
+Serving endpoint on the same runtime the bench measures - identical regime
+classification, budget clamp, and demand-serving path.
+
+| endpoint | what |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI format; `"stream": true` for SSE; `temperature`/`top_p`/`seed` passthrough; greedy default = lossless |
+| `GET /v1/models` | single-model list |
+| `GET /health` | regime, dense policy, streaming, MTP depth, ctx, cache cap |
+
+Server-specific knobs:
+
+| Variable | Effect |
+|---|---|
+| `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
+| `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
+| `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
+
+Behavior notes:
+
+- Requests serialize (single-decode runtime); a client disconnecting
+  mid-stream stops generation cleanly.
+- Thinking-off uses the Qwen3-family empty-think assistant prefix; on some
+  prompts the model re-opens thinking anyway - the server then flushes raw
+  output with a loud warning rather than returning nothing.
+- Long generations need context headroom: serving defaults to ctx 1024;
+  essays/reasoning-heavy prompts may want `CNE_CTX=4096`.
