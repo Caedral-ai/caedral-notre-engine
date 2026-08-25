@@ -171,7 +171,8 @@ tools/                     drivers & probes:
                              cne_identity_gate  correctness harness
 tests/features/            unit tests mirroring core areas
 tests/runtime/             shared boot-sequence tests
-docs/                      FEATURES.md · per-model notes
+docs/                      FEATURES.md · SETUP.md (server setup guide) ·
+                           per-model notes
 third_party/               llama.cpp (pinned upstream submodule)
 ```
 
@@ -240,7 +241,8 @@ Single session: requests serialize. Greedy by default (lossless);
 `CNE_THINK=0` or per-request `"chat_template_kwargs":{"enable_thinking":false}`.
 Abandoned streaming requests abort within one poll interval instead of
 hogging the engine slot; `CNE_MAX_REQ_S=<seconds>` adds an optional wall
-cap per request. Full endpoint/knob reference in `docs/FEATURES.md` §11.
+cap per request. Full endpoint/knob reference in `docs/FEATURES.md` §11;
+step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
