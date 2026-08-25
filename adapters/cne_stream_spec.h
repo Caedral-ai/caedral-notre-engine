@@ -41,6 +41,8 @@ void spec_mtp_size_outputs(struct llama_context_params& cparams,
 //  - cb: demand-serving eval callback, installed on BOTH the draft context
 //        created here and expected on the caller's target context.
 //  - on_token: invoked once per emitted token (never for EOS).
+//  - poll_stop: optional; polled between draft iterations. Nonzero return
+//    stops generation (client abort / wall budget).
 SpecStats spec_mtp_generate(llama_model* model,
                             llama_context* ctx,
                             const std::vector<llama_token>& prompt,
@@ -49,6 +51,7 @@ SpecStats spec_mtp_generate(llama_model* model,
                             int n_gen,
                             ggml_backend_sched_eval_callback cb,
                             void (*on_token)(void* ud, llama_token id),
-                            void* ud);
+                            void* ud,
+                            int (*poll_stop)(void* ud) = nullptr);
 
 } // namespace cne

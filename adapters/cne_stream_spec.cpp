@@ -30,7 +30,8 @@ SpecStats spec_mtp_generate(llama_model* model,
                             int n_gen,
                             ggml_backend_sched_eval_callback cb,
                             void (*on_token)(void*, llama_token),
-                            void* ud) {
+                            void* ud,
+                            int (*poll_stop)(void*)) {
     SpecStats stats;
     if (prompt.empty() || n_gen <= 0)
         return stats;
@@ -115,6 +116,7 @@ SpecStats spec_mtp_generate(llama_model* model,
     long step = 0;
 
     while (stats.produced < n_gen) {
+        if (poll_stop && poll_stop(ud)) break;
         if (draft.empty()) {
             ckpt.update_pos(
                     prompt_tgt.size(),

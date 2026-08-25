@@ -49,6 +49,7 @@ struct Engine {
     bool               think_default = true;   // CNE_THINK=0 flips the default
     bool               arch_qwen3    = false;  // enables the empty-think prefix
     std::string        chat_template;   // empty = model default template
+    double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
     std::mutex         gen_mutex;       // single-decode: serialize generation
 };
 
@@ -163,12 +164,23 @@ struct TokenStream {
         { std::lock_guard<std::mutex> l(m); done = true; failed = !ok; }
         cv.notify_all();
     }
-    // blocks until a piece is available or the stream ends
-    bool next(std::string& s) {
+
+    enum class Pull { piece, drained, timeout };
+
+    // Timed wait: the HTTP side must regain control periodically to poll
+    // socket liveness. On a half-open connection write() keeps succeeding
+    // into kernel buffers, so write failures alone never latch aborted.
+    Pull pull(std::string& s, int timeout_ms) {
         std::unique_lock<std::mutex> l(m);
-        cv.wait(l, [&] { return done || aborted.load() || !q.empty(); });
-        if (!q.empty()) { s = std::move(q.front()); q.pop_front(); return true; }
-        return false;
+        if (!cv.wait_for(l, std::chrono::milliseconds(timeout_ms),
+                         [&] { return done || aborted.load() || !q.empty(); }))
+            return Pull::timeout;
+        if (!q.empty()) {
+            s = std::move(q.front());
+            q.pop_front();
+            return Pull::piece;
+        }
+        return Pull::drained;
     }
 };
 
@@ -179,6 +191,10 @@ struct EmitCtx {
     TokenStream* stream = nullptr;   // null = non-streaming
     std::string  text;                // non-streaming accumulation
     long long    emitted = 0;
+    // wall budget per request; time_point::max() = unlimited
+    std::chrono::steady_clock::time_point deadline =
+        std::chrono::steady_clock::time_point::max();
+    int stop_reason = 0;   // latched by request_poll_stop: 1=client abort, 2=wall budget
 };
 
 // Shared token emission for both decode arms.
@@ -195,6 +211,19 @@ void emit_token(EmitCtx& e, llama_token id) {
 
 void emit_token_cb(void* ud, llama_token id) {
     emit_token(*static_cast<EmitCtx*>(ud), id);
+}
+
+// Polled between draft iterations in the MTP arm and per token in the
+// sequential arm. Returns nonzero to stop generation.
+int request_poll_stop(void* ud) {
+    EmitCtx& e = *static_cast<EmitCtx*>(ud);
+    if (e.stream && e.stream->aborted.load()) { e.stop_reason = 1; return 1; }
+    if (std::chrono::steady_clock::now() >= e.deadline) {
+        fprintf(stderr, "[server] request exceeded CNE_MAX_REQ_S wall budget - aborting\n");
+        e.stop_reason = 2;
+        return 1;
+    }
+    return 0;
 }
 
 // ---- engine thread -----------------------------------------------------------
@@ -242,7 +271,7 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
 
     const int ctx_n_gen = n_gen;
     for (int i = 0; i < ctx_n_gen; i++) {
-        if (stream && stream->aborted.load()) { finish_reason = "abort"; break; }
+        if (request_poll_stop(&emit)) { finish_reason = "abort"; break; }
         llama_token id = llama_sampler_sample(smpl, eng.ctx, -1);
         if (llama_vocab_is_eog(eng.vocab, id)) { finish_reason = "stop"; break; }
         emit_token(emit, id);
@@ -266,7 +295,11 @@ long long generate_mtp(Engine& eng, const std::vector<llama_token>& prompt,
                        std::string& finish_reason) {
     cne::SpecStats st = cne::spec_mtp_generate(
             eng.model, eng.ctx, prompt, eng.mtp_k, eng.mtp_p_min, n_gen,
-            cne::stream_cb_eval(), emit_token_cb, &emit);
+            cne::stream_cb_eval(), emit_token_cb, &emit,
+            request_poll_stop);
+
+    if (emit.stop_reason && finish_reason.empty())
+        finish_reason = "abort";
 
     fprintf(stderr,
             "[mtp] iterations=%ld drafted=%ld accepted=%ld (%.1f%%) "
@@ -454,6 +487,10 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::lock_guard<std::mutex> gen_lock(eng.gen_mutex);
 
     const auto t0 = std::chrono::steady_clock::now();
+    const auto deadline =
+        g_engine.max_req_s > 0
+            ? t0 + std::chrono::milliseconds((long long)(g_engine.max_req_s * 1000))
+            : std::chrono::steady_clock::time_point::max();
     const std::string id =
         "chatcmpl-cne-" + std::to_string(++g_req_counter);
     llama_sampler* smpl = build_sampler(temperature, top_p, seed);
@@ -488,6 +525,7 @@ void handle_chat(httplib::Response& res, const json& body) {
         st->smpl     = smpl;
         st->prompt_tokens = prompt;
         st->emit     = { &st->emitter, &st->stream, {}, 0 };
+        st->emit.deadline = deadline;
         st->emitter.strip_think = !think_enabled;
 
         // generation runs on the engine thread; provider drains as chunks
@@ -523,6 +561,12 @@ void handle_chat(httplib::Response& res, const json& body) {
                     std::string s = "data: " + j.dump() + "\n\n";
                     return sink.write(s.data(), s.size());
                 };
+                auto peer_gone = [&]() {
+                    fprintf(stderr, "[server] client disconnected "
+                                    "(socket dead) - aborting generation\n");
+                    stream->aborted.store(true);
+                    return false;
+                };
                 if (st->final_sent) return false;
 
                 if (!st->header_sent) {
@@ -535,11 +579,19 @@ void handle_chat(httplib::Response& res, const json& body) {
                 }
 
                 std::string piece;
-                if (stream->next(piece)) {
+                switch (stream->pull(piece, 500)) {
+                case TokenStream::Pull::timeout:
+                    // write() return alone is not trusted (half-open TCP);
+                    // is_writable() peeks the socket for RST/FIN
+                    return sink.is_writable() ? true : peer_gone();
+                case TokenStream::Pull::piece: {
                     json ch = chunk_base(st->id, eng.model_name);
                     ch["choices"][0]["delta"] = { {"content", piece} };
                     if (!send_chunk(ch)) stream->aborted.store(true);
                     return true;
+                }
+                default:
+                    break;
                 }
 
                 // generation ended
@@ -564,6 +616,7 @@ void handle_chat(httplib::Response& res, const json& body) {
     Emitter emitter;
     emitter.strip_think = !think_enabled;
     EmitCtx emit{ &emitter, nullptr, {}, 0 };
+    emit.deadline = deadline;
     long long n = 0;
     bool gen_done = false;
     std::mutex gen_m;
@@ -661,6 +714,10 @@ int main(int argc, char** argv) {
     if (const char* ct = cne::env("CHAT_TEMPLATE")) g_engine.chat_template = ct;
     if (cne::env("THINK") && strcmp(cne::env("THINK"), "0") == 0)
         g_engine.think_default = false;
+    if (const char* v = cne::env("MAX_REQ_S")) g_engine.max_req_s = atof(v);
+    if (g_engine.max_req_s > 0)
+        fprintf(stderr, "[server] wall cap: %.0fs per request (CNE_MAX_REQ_S)\n",
+                g_engine.max_req_s);
 
     // handlers read engine state through the long-lived g_engine view
     g_engine.regime_str       = rt->regime_str;
