@@ -38,20 +38,16 @@ artifact runs on machines with far less RAM via R3/R4 streaming.
 
 | config | tok/s | gain vs previous step |
 |---|---|---|
-| q8 profile, naive mmap (retired reference) | 0.57 | — |
-| q4_K_XL artifact, naive mmap, 8 threads | 2.19 | 3.8× (quantization of artifact) |
+| q4_K_XL artifact, naive mmap, 8 threads (stock config) | 2.19 | — |
 | same, **6 threads** (physical cores beat SMT) | **4.00** | **+82%** |
 | same + draft-MTP k=8 p_min=0.5 | **4.86** | **+20%** |
 | same, streaming ON (expert cache 93.9% hit-rate) | 4.52 | −2.4% = within noise |
 
-Cumulative: **8.5× from the retired q8 profile, ~2.2× from stock-config
-q4, +20% from speculation — all with bit-exact lossless output.**
+Cumulative: **~2.2× over the stock configuration — all with bit-exact
+lossless output.**
 
 ### What each gain is made of
 
-- **Artifact quantization (q8 → q4_K_XL)**: smaller weights = fewer bytes
-  per forward. This is an artifact choice, enabled by the engine loading
-  any quant without code changes.
 - **Thread tuning (+82%)**: the default "use every logical core" strategy
   costs ~2× on this chip — two SMT siblings fight over one FP unit. The
   engine's sweep found 6 threads optimal; `CNE_THREADS=6`.
