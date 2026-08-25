@@ -1,10 +1,6 @@
 #pragma once
-// Shared boot sequence for cne binaries (bench, server): manifest build,
-// regime/dense-policy selection, budget clamp, slice cache + stream runtime
-// wiring, O_DIRECT fill backend, warm/anon residency, llama model/context.
-//
-// Extracted behavior-preservingly from tools/cne-bench.cpp so drivers stay
-// thin (P6a discipline: no runtime logic inside measurement/serving tools).
+// Shared boot sequence for cne binaries (bench, server): manifest, regime,
+// budget clamp, cache/stream wiring, llama model/context. Drivers stay thin.
 #include "cne/cache.h"
 #include "cne/model.h"
 #include "cne_stream_cb.h"

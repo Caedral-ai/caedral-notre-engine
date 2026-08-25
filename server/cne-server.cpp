@@ -1,12 +1,5 @@
-// cne-server: OpenAI-compatible HTTP/SSE endpoint on the cne runtime.
-//
-// Single-session serving: one model, requests serialized by a mutex (the
-// demand-serving runtime holds a single-decode assumption). Lossless is the
-// default - greedy decoding unless the request asks for temperature.
-//
-// Load sequence mirrors tools/cne-bench.cpp: manifest -> regime/dense policy
-// -> budget clamp -> cache/runtime wiring -> llama load. All CNE_* env knobs
-// behave exactly as in the bench (legacy SOE_* accepted).
+// cne-server: OpenAI-compatible HTTP/SSE endpoint on the shared cne runtime.
+// Single session; greedy default (lossless), temperature opt-in per request.
 #include "cne/cache.h"
 #include "cne/memory_budget.h"
 #include "cne/model.h"
@@ -461,9 +454,6 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::lock_guard<std::mutex> gen_lock(eng.gen_mutex);
 
     const auto t0 = std::chrono::steady_clock::now();
-    // Upstream #26425 (Qwen3.6-MTP): draft-mtp retains state ACROSS requests;
-    // clear everything we control after each generation instead of before.
-
     const std::string id =
         "chatcmpl-cne-" + std::to_string(++g_req_counter);
     llama_sampler* smpl = build_sampler(temperature, top_p, seed);
@@ -516,8 +506,7 @@ void handle_chat(httplib::Response& res, const json& body) {
                                 "no visible text; flushing raw output\n");
                 if (!st->stream.aborted.load()) st->stream.push(std::move(rescue));
             }
-            // post-generation reset: see upstream #26425
-            llama_memory_clear(llama_get_memory(eng.ctx), true);
+            llama_memory_clear(llama_get_memory(eng.ctx), true);  // flush retained spec state
             st->stream.finish(n >= 0 && st->finish_reason != "error");
         });
 
@@ -598,7 +587,6 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::unique_lock<std::mutex> l(gen_m);
     gen_cv.wait(l, [&] { return gen_done; });
     llama_sampler_free(smpl);
-    // post-generation reset: see upstream #26425
     llama_memory_clear(llama_get_memory(eng.ctx), true);
 
     if (finish_reason == "error" || n < 0) {

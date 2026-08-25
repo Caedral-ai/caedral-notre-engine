@@ -1,5 +1,3 @@
-// Shared boot sequence implementation. Code moved verbatim from
-// tools/cne-bench.cpp (server previously duplicated it); see cne_runtime.h.
 #include "cne_runtime.h"
 
 #include "cne_stream_spec.h"

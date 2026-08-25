@@ -57,13 +57,12 @@ SpecStats spec_mtp_generate(llama_model* model,
     params.speculative.draft.ctx_dft = spec_init->context();
     llama_context* ctx_dft = params.speculative.draft.ctx_dft;
 
-    // seq-removal capability probe - DESTRUCTIVE (clears memory, decodes two
-    // dummy tokens, clears again). MUST run before prefill primes the target,
-    // and only once per process: repeating it after the prompt is decoded
-    // erases conditioning and the model outputs prior-driven text.
-    static bool  ckpt_probed       = false;
-    static bool  ckpt_use_tgt      = false;
-    static bool  ckpt_use_dft      = false;
+    // common_context_can_seq_rm is destructive (clears memory, decodes dummy
+    // tokens). Run it before prefill, once per process - calling it after the
+    // prompt is primed erases conditioning.
+    static bool  ckpt_probed  = false;
+    static bool  ckpt_use_tgt = false;
+    static bool  ckpt_use_dft = false;
     if (!ckpt_probed) {
         ckpt_use_tgt =
             common_context_can_seq_rm(ctx) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
