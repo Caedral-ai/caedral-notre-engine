@@ -31,6 +31,56 @@ struct Item {
     std::string reason;   // why the suggestion looks like this
 };
 
+// Input contract: every field has an accepted grammar; bad values re-prompt
+// interactively and abort scripted runs loudly.
+bool valid_value(const std::string& key, const std::string& v,
+                 std::string& err) {
+    auto all_digits = [](const std::string& s) {
+        return !s.empty() && s.find_first_not_of("0123456789") ==
+                                 std::string::npos;
+    };
+    if (key == "stream" || key == "think")
+        err = "on | off";
+    else if (key == "dense")
+        err = "mmap | warm | anon";
+    else if (key == "mtp" || key == "threads" || key == "ctx")
+        err = "a whole number" +
+              std::string(key == "threads" ? " >= 1" : "");
+    else if (key == "port")
+        err = "a port 1-65535";
+    else if (key == "cache_gib")
+        err = "a GiB number";
+    else if (key == "max_req_s")
+        err = "seconds (e.g. 600)";
+    else if (key == "host")
+        err = "an IP or hostname";
+    else
+        return true;
+
+    if (v.empty()) return true;   // '!' cleared -> engine default
+    if (key == "stream" || key == "think") {
+        if (v != "on" && v != "off" && v != "0" && v != "1") return false;
+        return true;
+    }
+    if (key == "dense")
+        return v == "mmap" || v == "warm" || v == "anon";
+    if (key == "host")
+        return v.find_first_of(" \t/") == std::string::npos;
+    if (key == "port")
+        return all_digits(v) && atoi(v.c_str()) >= 1 &&
+               atoi(v.c_str()) <= 65535;
+    if (key == "max_req_s") {
+        char* end = nullptr;
+        double d = strtod(v.c_str(), &end);
+        return end && *end == '\0' && d >= 0;
+    }
+    // remaining numerics: mtp, threads, ctx, cache_gib
+    if (!all_digits(v)) return false;
+    long n = atol(v.c_str());
+    if (key == "threads" || key == "ctx") return n >= 1;
+    return true;   // mtp >= 0, cache_gib >= 0 (= clamp)
+}
+
 bool read_line(std::string& out) {
     if (!std::getline(std::cin, out)) return false;
     while (!out.empty() && (out.back() == '\r' || out.back() == ' '))
@@ -218,7 +268,16 @@ int main(int argc, char** argv) {
         const char* preset = getenv(envkey.c_str());
 
         if (accept_all || (preset && *preset)) {
-            if (preset && *preset) it.value = preset;
+            if (preset && *preset) {
+                std::string err;
+                if (!valid_value(it.key, preset, err)) {
+                    fprintf(stderr, "%s: invalid %s preset '%s' "
+                                    "(expected: %s)\n",
+                            envkey.c_str(), it.key.c_str(), preset, err.c_str());
+                    return 2;
+                }
+                it.value = preset;
+            }
             printf("%-22s %-10s # %s\n", it.label.c_str(),
                    it.value.empty() ? "(engine default)" : it.value.c_str(),
                    it.reason.c_str());
@@ -231,16 +290,25 @@ int main(int argc, char** argv) {
                     envkey.c_str(), it.key.c_str());
             return 1;
         }
-        printf("%-22s [%s] : ", it.label.c_str(),
-               it.value.empty() ? "engine default" : it.value.c_str());
-        std::string line;
-        if (!read_line(line)) {
-            fprintf(stderr, "\naborted - no file written\n");
-            return 130;
+        while (true) {
+            printf("%-22s [%s] : ", it.label.c_str(),
+                   it.value.empty() ? "engine default" : it.value.c_str());
+            std::string line;
+            if (!read_line(line)) {
+                fprintf(stderr, "\naborted - no file written\n");
+                return 130;
+            }
+            if (line.empty()) break;              // keep suggestion
+            if (line == "!") { it.value.clear(); break; }
+            std::string err;
+            if (!valid_value(it.key, line, err)) {
+                printf("  invalid value (expected: %s) - try again\n",
+                       err.c_str());
+                continue;
+            }
+            it.value = line;
+            break;
         }
-        if (line.empty()) continue;              // keep suggestion
-        if (line == "!") { it.value.clear(); continue; }
-        it.value = line;
     }
 
     printf("\nresolved configuration:\n");
