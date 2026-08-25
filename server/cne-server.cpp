@@ -20,6 +20,8 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,8 +29,74 @@
 #include <vector>
 
 using json = nlohmann::json;
+namespace fs = std::filesystem;
 
 namespace {
+
+// ---- confirmed-config file (written by cne-setup) ----------------------------
+//
+// Precedence: explicit env > config file > built-in defaults. Config keys are
+// injected as CNE_* env vars ONLY when the user has not set that knob, so the
+// entire existing env plumbing (core and adapters included) honors the order
+// without changes. Every applied key is logged with its source.
+struct ConfigKnob {
+    const char* json_key;
+    const char* env_name;
+};
+
+const ConfigKnob g_config_knobs[] = {
+    {"stream", "STREAM"},       {"think", "THINK"},
+    {"mtp", "MTP"},             {"mtp_p_min", "MTP_P_MIN"},
+    {"threads", "THREADS"},     {"ctx", "CTX"},
+    {"cache_gib", "CACHE_GIB"}, {"dense", "DENSE"},
+    {"max_req_s", "MAX_REQ_S"},
+};
+
+// model_out stays empty when the config does not name one (argv supplies it).
+void apply_config_file(const std::string& path, std::string& model_out,
+                       std::string& host_out, int& port_out) {
+    std::ifstream f(path);
+    if (!f) return;
+    json cfg;
+    try {
+        f >> cfg;
+    } catch (...) {
+        fprintf(stderr, "[config] %s is not valid JSON - ignored\n",
+                path.c_str());
+        return;
+    }
+    if (!cfg.is_object()) {
+        fprintf(stderr, "[config] %s: expected object - ignored\n",
+                path.c_str());
+        return;
+    }
+    fprintf(stderr, "[config] loaded %s\n", path.c_str());
+    for (const auto& kn : g_config_knobs) {
+        if (!cfg.contains(kn.json_key)) continue;
+        const json& v = cfg[kn.json_key];
+        if (v.is_null()) continue;   // explicit engine default
+        std::string s = v.is_boolean() ? (v.get<bool>() ? "1" : "0") : v.dump();
+        // Raw getenv here: cne::env() caches negative lookups, so consulting
+        // it pre-injection would permanently hide these keys from the engine.
+        if (getenv(("CNE_" + std::string(kn.env_name)).c_str())) {
+            fprintf(stderr, "[config] %-11s kept env override\n", kn.env_name);
+            continue;
+        }
+#ifdef _WIN32
+        _putenv_s(("CNE_" + std::string(kn.env_name)).c_str(), s.c_str());
+#else
+        setenv(("CNE_" + std::string(kn.env_name)).c_str(), s.c_str(), 1);
+#endif
+        fprintf(stderr, "[config] %-11s = %s (config)\n", kn.env_name,
+                v.is_string() ? v.get<std::string>().c_str() : s.c_str());
+    }
+    if (cfg.contains("model") && cfg["model"].is_string())
+        model_out = cfg["model"].get<std::string>();
+    if (cfg.contains("host") && cfg["host"].is_string())
+        host_out = cfg["host"].get<std::string>();
+    if (cfg.contains("port") && cfg["port"].is_number_integer())
+        port_out = cfg["port"].get<int>();
+}
 
 // ---- engine state -----------------------------------------------------------
 
@@ -657,20 +725,66 @@ void handle_chat(httplib::Response& res, const json& body) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s <model.gguf> [host=127.0.0.1] [port=8080]\n",
-                argv[0]);
+    const char* config_arg = nullptr;
+    std::vector<const char*> pos;
+    for (int i = 1; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--config") {
+            if (++i >= argc) { fprintf(stderr, "--config needs a path\n"); return 2; }
+            config_arg = argv[i];
+        } else if (a == "-h" || a == "--help") {
+            printf("usage: %s [--config server.json] [model.gguf] [host] "
+                   "[port]\n", argv[0]);
+            return 0;
+        } else if (!a.empty() && a[0] == '-') {
+            fprintf(stderr, "unknown flag %s\n", a.c_str());
+            return 2;
+        } else pos.push_back(argv[i]);
+    }
+    const char* model_arg = pos.size() > 0 ? pos[0] : nullptr;
+    const char* host_arg  = pos.size() > 1 ? pos[1] : nullptr;
+    const char* port_arg  = pos.size() > 2 ? pos[2] : nullptr;
+
+    // Config discovery: --config wins; else next to the model argument;
+    // else the conventional models/server.json.
+    std::string cfg_model, cfg_host;
+    int         cfg_port = 0;
+    std::string config_path;
+    if (config_arg) config_path = config_arg;
+    else if (model_arg)
+        config_path = fs::path(model_arg).parent_path() / "server.json";
+    if (config_path.empty() || !fs::exists(config_path))
+        config_path = "models/server.json";
+    apply_config_file(config_path, cfg_model, cfg_host, cfg_port);
+
+    const char* host     = host_arg ? host_arg
+                         : !cfg_host.empty() ? cfg_host.c_str()
+                                             : "127.0.0.1";
+    int         port     = port_arg ? atoi(port_arg)
+                      : cfg_port > 0   ? cfg_port
+                                       : 8080;
+
+    std::string resolved_model = model_arg ? model_arg : cfg_model;
+    if (resolved_model.empty()) {
+        fprintf(stderr,
+                "usage: %s [--config server.json] <model.gguf> [host] [port]\n"
+                "       no model given and no 'model' key in %s\n",
+                argv[0], config_path.c_str());
         return 2;
     }
-    const char* host = argc > 2 ? argv[2] : "127.0.0.1";
-    int         port = argc > 3 ? atoi(argv[3]) : 8080;
+    if (!model_arg) {
+        // config-relative model paths
+        fs::path cfg_dir = fs::path(config_path).parent_path();
+        fs::path mp(resolved_model);
+        if (!cfg_dir.empty() && mp.is_relative() &&
+            fs::exists(cfg_dir / mp))
+            resolved_model = (cfg_dir / mp).string();
+    }
 
-    // ---- boot via the shared runtime module (same path as cne-bench) ----
-
-    g_engine.model_path = argv[1];
+    g_engine.model_path = resolved_model;
 
     cne::RuntimeSettings rs;
-    rs.model_path = argv[1];
+    rs.model_path = resolved_model.c_str();
     rs.cap_gib =
         cne::env("CACHE_GIB") ? (size_t)atoll(cne::env("CACHE_GIB")) : 8;
     rs.n_ctx     = 1024;   // serving default; 256 aborts near token ~250 under MTP
