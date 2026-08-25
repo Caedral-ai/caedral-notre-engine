@@ -207,24 +207,12 @@ struct Emitter {
         return piece;
     }
 
-    // Failure path: if think suppression held back EVERYTHING (generation
-    // truncated while a think block was still open), hand back the text so
-    // the user gets content instead of an empty response - but never the
-    // fake tag structure.
-    std::string rescue_all() {
-        if (!strip_think || sent > 0 || toks.empty()) return {};
-        std::string raw = detokenize(toks);
-        auto drop = [&](const char* tag) {
-            size_t p;
-            while ((p = raw.find(tag)) != std::string::npos)
-                raw.erase(p, strlen(tag));
-        };
-        drop("<think>");
-        drop("</think>");
-        size_t lead = raw.find_first_not_of("\n \t");
-        if (lead == std::string::npos) return {};
-        raw.erase(0, lead);
-        return raw;
+    // Failure path: think suppression held back EVERYTHING (generation
+    // ended while a think block was still open). There is no visible
+    // answer; report the truncation instead of leaking raw reasoning -
+    // owner ruling: with think off, neither tags nor think content ship.
+    bool truncated_in_think() const {
+        return strip_think && sent == 0 && !toks.empty();
     }
 };
 
@@ -618,14 +606,17 @@ void handle_chat(httplib::Response& res, const json& body) {
                     : generate_sequential(eng, st->prompt_tokens,
                                           st->smpl, n_gen, st->emit,
                                           &st->stream, st->finish_reason);
-            // think suppression swallowed everything -> flush raw output
-            std::string rescue = st->emitter.rescue_all();
-            if (!rescue.empty()) {
-                fprintf(stderr, "[server] WARNING: think suppression produced "
-                                "no visible text; flushing raw output\n");
-                if (!st->stream.aborted.load()) st->stream.push(std::move(rescue));
-            }
-            llama_memory_clear(llama_get_memory(eng.ctx), true);  // flush retained spec state
+        // generation ran out of budget inside a suppressed think block:
+        // surface the reason instead of an empty message
+        if (st->emitter.truncated_in_think()) {
+            fprintf(stderr, "[server] WARNING: response truncated while "
+                            "thinking (suppressed); no visible text\n");
+            st->stream.push(std::string(
+                "[no answer generated: the model used all " +
+                std::to_string(n_gen) +
+                " tokens thinking; increase max_tokens or disable thinking]"));
+        }
+        llama_memory_clear(llama_get_memory(eng.ctx), true);  // flush retained spec state
             st->stream.finish(n >= 0 && st->finish_reason != "error");
         });
 
@@ -709,11 +700,13 @@ void handle_chat(httplib::Response& res, const json& body) {
                 : generate_sequential(eng, prompt, smpl, n_gen, emit, nullptr,
                                       finish_reason);
         std::lock_guard<std::mutex> l(gen_m);
-        std::string rescue = emitter.rescue_all();
-        if (!rescue.empty()) {
-            fprintf(stderr, "[server] WARNING: think suppression produced "
-                            "no visible text; flushing raw output\n");
-            emit.text += rescue;
+        if (emitter.truncated_in_think()) {
+            fprintf(stderr, "[server] WARNING: response truncated while "
+                            "thinking (suppressed); no visible text\n");
+            emit.text =
+                "[no answer generated: the model used all " +
+                std::to_string(n_gen) +
+                " tokens thinking; increase max_tokens or disable thinking]";
         }
         gen_done = true;
         gen_cv.notify_one();
@@ -822,11 +815,14 @@ int main(int argc, char** argv) {
                 "measurement vehicle. ***\n",
                 rt->mtp_k);
 
+    // Architecture gate from OUR manifest (fail-closed GGUF read). The
+    // upstream llama_model_meta_val_str lookup returned not-found on this
+    // artifact even though the key exists - do not trust it here.
     {
-        char arch[64] = {0};
-        if (llama_model_meta_val_str(rt->model, "general.architecture",
-                                     arch, sizeof(arch)) == 0)
-            g_engine.arch_qwen3 = strncmp(arch, "qwen3", 5) == 0;
+        const std::string& arch = rt->manifest.architecture;
+        g_engine.arch_qwen3 = arch.rfind("qwen3", 0) == 0;
+        fprintf(stderr, "[server] arch=%s qwen3_gate=%d\n", arch.c_str(),
+                (int)g_engine.arch_qwen3);
     }
     {
         auto pos  = g_engine.model_path.find_last_of('/');
