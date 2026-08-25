@@ -88,21 +88,32 @@ SpecStats spec_mtp_generate(llama_model* model,
     // Prompt through the target (all but last token), then hand the state to
     // the speculator. The last token joins the first verify batch instead -
     // its logits are what produce the first sampled continuation.
-    llama_batch batch_prompt =
-        llama_batch_init(prompt.size() > 1 ? prompt.size() - 1 : 1, 0, 1);
-    for (size_t i = 0; i + 1 < prompt.size(); i++)
-        common_batch_add(batch_prompt, prompt[i], (llama_pos)i, { 0 }, false);
-    if (llama_decode(ctx, batch_prompt)) {
-        fprintf(stderr, "\n[cne] PREFILL FAILED (mtp)\n");
-        llama_batch_free(batch_prompt);
-        return stats;
+    // Chunked prefill: batches are capped at n_batch (a longer single
+    // batch aborts inside llama_decode); the drafter processes each chunk
+    // so its state stays in lockstep with the target.
+    {
+        const int n_batch = llama_n_batch(ctx);
+        for (size_t off = 0; off + 1 < prompt.size(); off += n_batch) {
+            const size_t len =
+                std::min<size_t>(n_batch, prompt.size() - 1 - off);
+            llama_batch chunk = llama_batch_init((int)len, 0, 1);
+            for (size_t j = 0; j < len; j++)
+                common_batch_add(chunk, prompt[off + j], (llama_pos)(off + j),
+                                 { 0 }, false);
+            if (llama_decode(ctx, chunk)) {
+                fprintf(stderr, "\n[cne] PREFILL FAILED (mtp) at offset %zu\n",
+                        off);
+                llama_batch_free(chunk);
+                return stats;
+            }
+            if (!common_speculative_process(spec.get(), chunk)) {
+                fprintf(stderr, "\n[cne] SPEC PROMPT PROCESS FAILED\n");
+                llama_batch_free(chunk);
+                return stats;
+            }
+            llama_batch_free(chunk);
+        }
     }
-    if (prompt.size() > 1 && !common_speculative_process(spec.get(), batch_prompt)) {
-        fprintf(stderr, "\n[cne] SPEC PROMPT PROCESS FAILED\n");
-        llama_batch_free(batch_prompt);
-        return stats;
-    }
-    llama_batch_free(batch_prompt);
 
     llama_token id_last = prompt.back();
     std::vector<llama_token> prompt_tgt(prompt.begin(), prompt.end() - 1);

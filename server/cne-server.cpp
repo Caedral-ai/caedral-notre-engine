@@ -331,11 +331,18 @@ void submit_job(std::function<void()> f) {
 long long generate_sequential(Engine& eng, const std::vector<llama_token>& prompt,
                               llama_sampler* smpl, int n_gen, EmitCtx& emit,
                               TokenStream* stream, std::string& finish_reason) {
-    if (llama_decode(eng.ctx, llama_batch_get_one(
-                const_cast<llama_token*>(prompt.data()), (int)prompt.size()))) {
-        fprintf(stderr, "[server] PREFILL FAILED\n");
-        finish_reason = "error";
-        return -1;
+    // Prefill in n_batch-sized chunks: a single llama_batch_get_one over a
+    // long prompt aborts inside llama_decode (>512 rows kills the PROCESS).
+    const int n_batch = llama_n_batch(eng.ctx);
+    for (int off = 0; off < (int)prompt.size(); off += n_batch) {
+        const int len =
+            std::min((size_t)n_batch, prompt.size() - off);
+        if (llama_decode(eng.ctx, llama_batch_get_one(
+                const_cast<llama_token*>(prompt.data() + off), len))) {
+            fprintf(stderr, "[server] PREFILL FAILED at offset %d\n", off);
+            finish_reason = "error";
+            return -1;
+        }
     }
 
     const int ctx_n_gen = n_gen;
