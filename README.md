@@ -107,7 +107,8 @@ Users state intent; the engine resolves settings:
 | OpenAI-compatible server | ![](https://img.shields.io/badge/status-planned-lightgrey) | SSE endpoint on top of the extracted runtime |
 
 Full per-feature guidance — including when *not* to use each one — lives in
-**[docs/FEATURES.md](docs/FEATURES.md)**.
+**[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
+velocity gains and reproduction commands: **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)**.
 
 ## Principles
 
