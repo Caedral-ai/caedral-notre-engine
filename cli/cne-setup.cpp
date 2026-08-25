@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         build_suggestions(*artifact, model_bytes, budget, hw_threads);
 
     printf("confirm each setting (Enter = suggestion, type a value = override,"
-           " '!' = engine default)\n");
+           " '!' = engine default; accepted values shown per prompt)\n");
     for (auto& it : items) {
         // scripted mode presets one item via CNE_SETUP_<KEY>
         std::string envkey = "CNE_SETUP_" + it.key;
@@ -290,9 +290,14 @@ int main(int argc, char** argv) {
                     envkey.c_str(), it.key.c_str());
             return 1;
         }
+        std::string err_unused;
         while (true) {
-            printf("%-22s [%s] : ", it.label.c_str(),
-                   it.value.empty() ? "engine default" : it.value.c_str());
+            std::string hint;
+            valid_value(it.key, "", hint);
+            std::string suffix = hint.empty() ? "" : " (" + hint + ")";
+            printf("%-22s [%s]%s : ", it.label.c_str(),
+                   it.value.empty() ? "engine default" : it.value.c_str(),
+                   suffix.c_str());
             std::string line;
             if (!read_line(line)) {
                 fprintf(stderr, "\naborted - no file written\n");
@@ -300,10 +305,9 @@ int main(int argc, char** argv) {
             }
             if (line.empty()) break;              // keep suggestion
             if (line == "!") { it.value.clear(); break; }
-            std::string err;
-            if (!valid_value(it.key, line, err)) {
+            if (!valid_value(it.key, line, err_unused)) {
                 printf("  invalid value (expected: %s) - try again\n",
-                       err.c_str());
+                       hint.c_str());
                 continue;
             }
             it.value = line;
