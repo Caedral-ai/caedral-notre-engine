@@ -676,7 +676,10 @@ void handle_chat(httplib::Response& res, const json& body) {
                     last["choices"][0]["finish_reason"] = st->finish_reason;
                     send_chunk(last);
                     std::string done = "data: [DONE]\n\n";
-                    sink.write(done.data(), done.size());
+                    // done() closes the chunked response CLEANLY; returning
+                    // false alone makes httplib cancel -> clients see
+                    // "transfer closed with outstanding read data"
+                    if (sink.write(done.data(), done.size())) sink.done();
                 }
                 st->final_sent = true;
                 return false;
