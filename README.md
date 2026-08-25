@@ -25,9 +25,9 @@ speculative decoding live in a dedicated layer outside it.*
 
 ---
 
-> **Status: pre-alpha.** The streaming pipeline and measurement tooling are
-> working end-to-end; the serving layer and user-facing profiles are next.
-> See [Roadmap](#roadmap).
+> **Status: pre-alpha.** Streaming pipeline, serving layer and the first-run
+> setup CLI are working end-to-end; hardening and user-facing profiles are
+> next. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -146,8 +146,9 @@ Client (OpenAI SDK / Open WebUI / n8n)
              NVMe / Flash (GGUF shards)
 ```
 
-Today the runtime speaks through `cne_bench` (measurement driver); the
-server wraps the same API surface later.
+The runtime speaks through `cne_bench` (measurement driver) and
+`cne-server` (serving); `cne-setup` resolves hardware/model into a
+confirmed configuration for the server.
 
 ## Repository layout
 
@@ -162,6 +163,8 @@ adapters/                  llama.cpp seam:
                              cne_stream_cb.cpp   demand-serving runtime
                              cne_stream_spec.cpp draft-MTP generation loop
 server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
+cli/                       user-facing CLIs:
+                             cne_setup       first-run config (detect, suggest, confirm)
 tools/                     drivers & probes:
                              cne_bench       end-to-end bench
                              cne_prepare     GGUF alignment tool
@@ -202,13 +205,31 @@ The cache cap is automatically clamped to the machine's real budget.
 ### Serve (OpenAI-compatible)
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON
-cmake --build build --target cne_server -j
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
+cmake --build build --target cne_server cne_setup -j
 
-# recommended lossless serving config (see docs/BENCHMARKS.md)
-CNE_DENSE=mmap CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6 CNE_FA=1 \
-    ./build/server/cne_server models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf 127.0.0.1 8080
+# first run: detect hardware, preview the regime, confirm every setting
+# interactively (or -y to accept the suggestions). Writes models/server.json;
+# aborting writes nothing.
+./build/cli/cne_setup
 
+# boot with zero env vars - the confirmed config drives everything
+./build/server/cne_server
+```
+
+Prefer explicit control? Skip `cne_setup` and pass knobs directly:
+
+```sh
+CNE_DENSE=mmap CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6 \
+    ./build/server/cne_server \
+    models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
+    127.0.0.1 8080
+```
+
+Precedence: environment variables > `server.json` > built-in defaults; every
+resolved knob is logged with its source at boot.
+
+```sh
 curl http://localhost:8080/v1/chat/completions \
     -H "Content-Type: application/json" \
     -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
@@ -217,7 +238,9 @@ curl http://localhost:8080/v1/chat/completions \
 Single session: requests serialize. Greedy by default (lossless);
 `temperature`/`top_p`/`seed` honored per request. Disable thinking with
 `CNE_THINK=0` or per-request `"chat_template_kwargs":{"enable_thinking":false}`.
-Full endpoint/knob reference in `docs/FEATURES.md` §11.
+Abandoned streaming requests abort within one poll interval instead of
+hogging the engine slot; `CNE_MAX_REQ_S=<seconds>` adds an optional wall
+cap per request. Full endpoint/knob reference in `docs/FEATURES.md` §11.
 
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
@@ -234,6 +257,7 @@ Full endpoint/knob reference in `docs/FEATURES.md` §11.
 | `CNE_EXPERT_MASS` | 0 < x ≤ 1 | **lossy**: drop tail experts below cumulative routing mass |
 | `CNE_EXPERT_MIN_K` | N | minimum experts kept when mass gating is active |
 | `CNE_CTX` | N | context size |
+| `CNE_MAX_REQ_S` | seconds | wall budget per request; loud abort on exceed (default off) |
 | `CNE_PROMPT` | text | custom prompt |
 | `CNE_PPL_FILE` | path | whole-model perplexity mode over a text corpus |
 
@@ -271,8 +295,10 @@ zero dropped slices), and KV q8_0 was rejected as a CPU regression.
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
 5. `cne-server` with OpenAI-compatible SSE — **single-session serving done**;
-   hardening (auth, quotas, multi-session) next
-6. User-facing quality profiles (`lossless` / `balanced` / `fast`)
+   disconnect detection + `cne-setup` first-run CLI done; hardening
+   (auth, quotas, multi-session) next
+6. User-facing quality profiles (`lossless` / `balanced` / `fast`) —
+   config-file plumbing shipped via `cne-setup`
 7. Multi-user serving, autotune, packaging
 
 Non-goals: GPU offloading, training/fine-tuning, dense-model optimization
