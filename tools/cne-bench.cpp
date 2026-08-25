@@ -12,6 +12,7 @@
 #include "cne/config.h"
 #include "cne/model_registry.h"
 
+#include "cne_runtime.h"
 #include "cne_stream_cb.h"
 #include "cne_stream_spec.h"
 
@@ -51,9 +52,6 @@ MemSnap mem_snap() {
     return m;
 }
 
-// ---- Dense residency policies --------------------------------------------
-enum class DensePolicy { MMAP, WARM, ANON };
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -69,216 +67,25 @@ int main(int argc, char** argv) {
     size_t verify_n = argc > 4 ? (size_t)atoll(argv[4]) : 64;
     bool rebind     = argc > 5 ? atoi(argv[5]) != 0 : true;
 
-    cne::ModelRegistry reg;
-    cne::ModelManifest manifest;
-    if (!reg.build(argv[1], manifest)) {
-        fprintf(stderr, "[cne-bench] manifest FAILED: %s\n", reg.error().c_str());
-        return 1;
-    }
-
-    // Dense policy: explicit env wins; otherwise AUTO from the detected
-    // memory regime - when the model is well above available RAM, anon-dense
-    // residency avoids page-fault storms; smaller models stay on mmap.
-    DensePolicy g_dense = DensePolicy::MMAP;
-    {
-        const char* dp = cne::env("DENSE");
-        std::string s = dp ? dp : "";
-        cne::MemoryBudget pre = cne::MemoryBudget::detect();
-        uint64_t dense_bytes = 0;
-        for (const auto& ti : manifest.tensors)
-            if (ti.kind != cne::TensorKind::ROUTED_EXPERT)
-                dense_bytes += ti.bytes_total;
-        cne::Regime rg = cne::classify((size_t)manifest.file_size, pre.mem_available);
-        printf("regime=%s (available %.1f GiB, dense %.2f GiB)\n",
-               cne::regime_name(rg), pre.mem_available / 1073741824.0,
-               dense_bytes / 1073741824.0);
-        if (s.empty())
-            g_dense = (rg != cne::Regime::R0_RESIDENT &&
-                       pre.mem_available > dense_bytes * 2)
-                          ? DensePolicy::ANON
-                          : DensePolicy::MMAP;
-        else if (s == "warm") g_dense = DensePolicy::WARM;
-        else if (s == "anon") g_dense = DensePolicy::ANON;
-        printf("dense policy: %s\n",
-               g_dense == DensePolicy::ANON ? "anon"
-               : g_dense == DensePolicy::WARM ? "warm" : "mmap");
-    }
-
-    // Budget manager: clamp the cache cap to what this machine can hold,
-    // so an oversized user cap degrades gracefully instead of getting the
-    // process OOM-killed mid-generation.
-    cne::MemoryBudget budget = cne::MemoryBudget::detect();
-    budget.kv = 64u << 20;         // measured: llama compute buffer + KV/S-state
-    budget.staging = 64u << 20;
-    budget.runtime_base = 512u << 20;
-    // ANON policy moves dense weights from reclaimable page cache into the
-    // anonymous sum - the cache clamp must shrink by the same amount.
-    if (g_dense == DensePolicy::ANON)
-        for (const auto& ti : manifest.tensors)
-            if (ti.kind != cne::TensorKind::ROUTED_EXPERT)
-                budget.runtime_base += ti.bytes_total;
-    size_t requested = cap_gib << 30;
-    size_t effective = budget.clamp_cache_cap(requested);
-    if (effective != requested)
-        fprintf(stderr, "[budget] cache cap clamped: %zu GiB -> %zu GiB "
-                        "(available %.1f GiB)\n",
-                (size_t)cap_gib, effective >> 30,
-                budget.mem_available / 1073741824.0);
-    {
-        auto regime = cne::classify((size_t)manifest.file_size, budget.mem_available);
-        printf("budget: available=%.1f GiB model=%.1f GiB regime=%s cap=%zu MiB\n",
-               budget.mem_available / 1073741824.0,
-               manifest.file_size / 1073741824.0,
-               cne::regime_name(regime), effective >> 20);
-    }
-
-    // Expert-mass gating (conditional expert execution): DEFAULT UNSET =
-    // lossless full top-k. When set, tail experts below the cumulative
-    // routing-mass threshold are dropped per token. This is LOSSY - loud
-    // telemetry whenever active.
-    float l2_mass = 0.0f;
-    int l2_min_k = 2;
-    if (cne::env("EXPERT_MASS")) {
-        l2_mass = (float)atof(cne::env("EXPERT_MASS"));
-        l2_min_k = cne::env("EXPERT_MIN_K") ? atoi(cne::env("EXPERT_MIN_K")) : 2;
-        if (l2_mass <= 0.0f || l2_mass > 1.0f) {
-            fprintf(stderr, "[expert-mass] invalid CNE_EXPERT_MASS (or legacy "
-                            "SOE_EXPERT_MASS) - gating disabled\n");
-            l2_mass = 0.0f;
-        } else {
-            printf("*** [expert-mass] ACTIVE: mass=%.2f min_k=%d "
-                   "(LOSSY profile - quality degradation expected) ***\n",
-                   l2_mass, l2_min_k);
-        }
-    }
-
-    // Prefetch overlap: measured as a no-op or regression on this
-    // hardware/model (adequate caching already captures cross-token routing
-    // locality, and the prefetcher contends with demand fills on the cache
-    // mutex); kept flag-gated for future capacity-pressure regimes.
-    cne::PfMode pf_mode = cne::PfMode::OFF;
-    {
-        const char* pf = cne::env("PREFETCH");
-        std::string pfs = pf ? pf : "";
-        if (pfs == "1" || pfs == "lookahead")
-            pf_mode = cne::PfMode::LOOKAHEAD;
-        else if (pfs == "full")
-            pf_mode = cne::PfMode::FULL;
-    }
-
-    cne::SliceCache cache(cne::CacheLimits{effective});
-    cache.set_verify_next(verify_n);
-
-    // Runtime wiring: callback machinery + fill backend.
-    cne::StreamConfig cfg;
-    cfg.rebind     = rebind;
-    cfg.full_fill  = cne::env("FULL_FILL") != nullptr;
-    cfg.step_fills = cne::env("STEP_FILLS") != nullptr;
-    cfg.l2_mass    = l2_mass;
-    cfg.l2_min_k   = l2_min_k;
-    cfg.pf_mode    = pf_mode;
-    cne::stream_init(manifest, cache, cfg);
-
-    bool use_odirect = cne::stream_open_fill_backend(argv[1],
-                         cne::env("LANES") ? atoi(cne::env("LANES")) : 4);
-    cne::stream_prefetch_start();
-
-    // WARM policy: page in all dense spans before context creation.
-    if (g_dense == DensePolicy::WARM) {
-        auto t0 = Clock::now();
-        FILE* f = fopen(argv[1], "rb");
-        if (!f) { fprintf(stderr, "[dense] warm open failed\n"); return 1; }
-        char wbuf[1 << 20];
-        size_t warmed = 0;
-        for (const auto& ti : manifest.tensors) {
-            if (ti.kind == cne::TensorKind::ROUTED_EXPERT) continue;
-            if (fseeko(f, (off_t)ti.abs_offset, SEEK_SET) != 0) continue;
-            uint64_t left = ti.bytes_total;
-            while (left) {
-                size_t c = left < sizeof(wbuf) ? (size_t)left : sizeof(wbuf);
-                if (fread(wbuf, 1, c, f) != c) break;
-                left -= c; warmed += c;
-            }
-        }
-        fclose(f);
-        double secs = std::chrono::duration<double>(Clock::now() - t0).count();
-        printf("dense=warm: %.1f MiB paged in (%.2fs)\n", warmed / 1048576.0, secs);
-    }
-
-    llama_backend_init();
-    auto mparams = llama_model_default_params();
-    mparams.n_gpu_layers    = 0;
-    mparams.use_extra_bufts = false;
-    if (cne::env("MTP")) mparams.load_mtp = true;
-    llama_model* model = llama_model_load_from_file(argv[1], mparams);
-    if (!model) { fprintf(stderr, "[cne-bench] LOAD FAILED\n"); return 1; }
-
-    auto cparams             = llama_context_default_params();
-    int ctx_size             = cne::env("CTX") ? atoi(cne::env("CTX")) : 256;
-    if (ctx_size < 64) ctx_size = 64;
-    cparams.n_ctx            = ctx_size;
-    cparams.n_batch          = ctx_size < 512 ? ctx_size : 512;
-    cparams.n_ubatch         = 64;
-    int n_threads = cne::env("THREADS") ? atoi(cne::env("THREADS")) : 8;
-    if (n_threads < 1) n_threads = 1;
-    cparams.n_threads        = n_threads;
-    cparams.n_threads_batch  = n_threads;
-    if (cne::env("KV_Q8")) {
-        cparams.type_k = GGML_TYPE_Q8_0;
-        cparams.type_v = GGML_TYPE_Q8_0;
-    }
-    cparams.flash_attn_type =
-        cne::env("FA") ? LLAMA_FLASH_ATTN_TYPE_ENABLED
-                       : LLAMA_FLASH_ATTN_TYPE_AUTO;
-    cparams.cb_eval          = cne::stream_cb_eval();
-    cparams.cb_eval_user_data = nullptr;
-    // MTP speculative decoding (CNE_MTP): 1 = default draft depth, N = depth.
-    // The target context stays LLAMA_CONTEXT_TYPE_DEFAULT - the MTP context
-    // type builds graph_mtp (nextn block alone) and belongs on the DRAFT
-    // context, which common_speculative_init_from_params creates for us.
-    int mtp_k = 0;
-    if (cne::env("MTP")) {
-        mtp_k = atoi(cne::env("MTP"));
-        if (mtp_k < 0) mtp_k = 0;
-    }
-    float mtp_p_min = cne::env("MTP_P_MIN") ? (float)atof(cne::env("MTP_P_MIN")) : 0.0f;
-    if (mtp_k > 0) {
-        cne::spec_mtp_size_outputs(cparams, mtp_k, (int)cparams.n_batch);
-        fprintf(stderr, "[mtp] draft-mtp enabled: n_max=%d n_outputs_max=%u\n",
-                mtp_k, cparams.n_outputs_max);
-    }
-
-    llama_context* ctx = llama_init_from_model(model, cparams);
-    if (!ctx) { fprintf(stderr, "[cne-bench] CONTEXT FAILED\n"); return 1; }
-    // Warmup runs must stay off for models near or above RAM size: the
-    // dummy-shape decode can page in large weight spans for no benefit.
-    // Exception: MTP probing keeps upstream's warmup-on behavior, since the
-    // nextn-augmented graph may need shaped buffers before real decodes.
-    if (!cne::env("MTP"))
-        llama_set_warmup(ctx, false);
-
-    // ANON policy: one scan decode binds every dense weight to anon memory,
-    // then memory is cleared so generation state is pristine.
-    if (g_dense == DensePolicy::ANON) {
-        cne::stream_anon_scan_begin();
-        llama_token b = llama_vocab_bos(llama_model_get_vocab(model));
-        llama_batch wb = llama_batch_get_one(&b, 1);
-        if (llama_decode(ctx, wb))
-            fprintf(stderr, "[dense] anon scan decode failed (continuing)\n");
-        cne::stream_anon_scan_end();
-        llama_memory_clear(llama_get_memory(ctx), true);
-        printf("dense=anon: %zu tensors bound, %zu MiB anonymous\n",
-               cne::stream_dense_bound_count(),
-               cne::stream_dense_anon_bytes() >> 20);
-    }
+    cne::RuntimeSettings rs;
+    rs.model_path = argv[1];
+    rs.cap_gib    = cap_gib;
+    rs.n_ctx     = 256;      // bench default; CNE_CTX overrides
+    rs.n_threads = 8;
+    rs.stream_on = rebind;
+    auto rt = cne::runtime_prepare(rs);
+    if (!rt || !cne::runtime_load_llama(*rt, rs)) return 1;
+    rt->cache->set_verify_next(verify_n);
+    cne::Runtime& R = *rt;
 
     const char* prompt = cne::env("PROMPT") ? cne::env("PROMPT")
                                              : "The capital of France is";
-    const auto* vocab  = llama_model_get_vocab(model);
+    float mtp_p_min =
+        cne::env("MTP_P_MIN") ? (float)atof(cne::env("MTP_P_MIN")) : 0.0f;
 
     // ---- Whole-model perplexity mode (policy-aware: expert-mass gating and
     // anon-dense residency apply) ----
-    // Chunked cross-entropy over a plain-text corpus: windows of ctx tokens,
+    // Chunked cross-entropy over a plain-text corpus: windows of n_ctx tokens,
     // non-overlapping, memory cleared between windows. This is the canonical
     // whole-model quality gate because external llama-perplexity cannot apply
     // our callback policies (expert-mass gating, residency, streaming).
@@ -292,17 +99,17 @@ int main(int argc, char** argv) {
         int n_seq = -1;
         while (n_seq < 0) {
             if ((size_t)(-n_seq) > seq.size()) seq.resize((size_t)(-n_seq));
-            n_seq = llama_tokenize(vocab, text.c_str(), (int)text.size(),
+            n_seq = llama_tokenize(R.vocab, text.c_str(), (int)text.size(),
                                    seq.data(), (int)seq.size(), true, false);
             if (n_seq < 0 && (size_t)(-n_seq) == seq.size())
                 seq.resize(seq.size() * 2);
         }
         seq.resize(n_seq);
-        const int nv = llama_vocab_n_tokens(vocab);
+        const int nv = llama_vocab_n_tokens(R.vocab);
         double nll = 0.0; long long ntok = 0;
         int wins = 0;
-        for (size_t off = 0; off + 1 < (size_t)n_seq; off += (size_t)ctx_size) {
-            const int n = (int)std::min((size_t)ctx_size, (size_t)n_seq - off);
+        for (size_t off = 0; off + 1 < (size_t)n_seq; off += (size_t)R.n_ctx) {
+            const int n = (int)std::min((size_t)R.n_ctx, (size_t)n_seq - off);
             if (n < 2) break;
             llama_batch wb = llama_batch_init(n, 0, 1);
             for (int i = 0; i < n; i++) {
@@ -313,14 +120,14 @@ int main(int argc, char** argv) {
                 wb.logits[i] = true;   // need CE at every position
             }
             wb.n_tokens = n;
-            if (llama_decode(ctx, wb)) {
+            if (llama_decode(R.ctx, wb)) {
                 llama_batch_free(wb);
                 fprintf(stderr, "[ppl] decode failed at offset %zu\n", off);
                 return 1;
             }
             llama_batch_free(wb);
             for (int i = 0; i + 1 < (int)n; i++) {
-                const float* lg = llama_get_logits_ith(ctx, i);
+                const float* lg = llama_get_logits_ith(R.ctx, i);
                 float mx = lg[0];
                 for (int v2 = 1; v2 < nv; v2++) mx = std::max(mx, lg[v2]);
                 double lse = mx;
@@ -330,19 +137,19 @@ int main(int argc, char** argv) {
                 nll += lse - (double)lg[seq[off + i + 1]];
                 ntok++;
             }
-            llama_memory_clear(llama_get_memory(ctx), true);
+            llama_memory_clear(llama_get_memory(R.ctx), true);
             wins++;
             fprintf(stderr, "[ppl] window %d done (%lld tokens evaluated)\n",
                     wins, ntok);
         }
         double ppl = ntok ? std::exp(nll / (double)ntok) : 0.0;
         printf("engine-ppl: %.4f (ntok %lld, windows %d, n_ctx %d)\n",
-               ppl, ntok, wins, ctx_size);
-        if (l2_mass > 0.0f)
+               ppl, ntok, wins, R.n_ctx);
+        if (R.l2_mass > 0.0f)
             printf("[expert-mass] dropped slices total: %ld\n",
                    cne::stream_telemetry().l2_dropped);
-        llama_free(ctx);
-        llama_model_free(model);
+        llama_free(R.ctx);
+        llama_model_free(R.model);
         llama_backend_free();
         return 0;
     }
@@ -353,14 +160,19 @@ int main(int argc, char** argv) {
     while (n_tok < 0) {
         if ((size_t)(-n_tok) > toks.size())
             toks.resize((size_t)(-n_tok));
-        n_tok = llama_tokenize(vocab, prompt, (int)strlen(prompt),
+        n_tok = llama_tokenize(R.vocab, prompt, (int)strlen(prompt),
                                toks.data(), (int)toks.size(), true, false);
         if (n_tok < 0 && (size_t)(-n_tok) == toks.size())
             toks.resize(toks.size() * 2);
     }
     toks.resize(n_tok);
-    printf("prefill tokens: %d (n_ctx %d)\n", n_tok, (int)cparams.n_ctx);
-    if (mtp_k > 0) {
+    printf("prefill tokens: %d (n_ctx %d)\n", n_tok, R.n_ctx);
+    if (cne::env("DEBUG_TOKIDS")) {
+        printf("prompt ids:");
+        for (int i = 0; i < n_tok; i++) printf(" %d", toks[i]);
+        printf("\n");
+    }
+    if (R.mtp_k > 0) {
         // MTP path below does its own two-phase prefill (n-1 tokens, then
         // the last token together with the first verify batch).
     } else if (cne::env("SPLIT_PREFILL")) {
@@ -375,24 +187,24 @@ int main(int argc, char** argv) {
             bp.logits[i] = false;
         }
         bp.n_tokens = n_tok > 1 ? n_tok - 1 : 1;
-        if (llama_decode(ctx, bp)) { fprintf(stderr, "[cne-bench] PREFILL FAILED\n"); return 1; }
+        if (llama_decode(R.ctx, bp)) { fprintf(stderr, "[cne-bench] PREFILL FAILED\n"); return 1; }
         llama_batch_free(bp);
         llama_token il = toks.back();
-        if (llama_decode(ctx, llama_batch_get_one(&il, 1))) {
+        if (llama_decode(R.ctx, llama_batch_get_one(&il, 1))) {
             fprintf(stderr, "[cne-bench] PREFILL FAILED\n");
             return 1;
         }
-    } else if (llama_decode(ctx, llama_batch_get_one(toks.data(), n_tok))) {
+    } else if (llama_decode(R.ctx, llama_batch_get_one(toks.data(), n_tok))) {
         fprintf(stderr, "[cne-bench] PREFILL FAILED\n");
         return 1;
     }
 
-    printf("windows created: (see [geom] lines above) | cap: %zu MiB\n", effective >> 20);
+    printf("windows created: (see [geom] lines above) | cap: %zu MiB\n", R.cache_cap >> 20);
 
     llama_sampler* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
-    uint64_t misses_before = cache.stats().misses;
+    uint64_t misses_before = R.cache->stats().misses;
     MemSnap snap0 = mem_snap();
     auto t0 = Clock::now();
     printf("tokens:");
@@ -403,23 +215,23 @@ int main(int argc, char** argv) {
     auto dump_logits = [&](int tag) {
         const char* ldir = cne::env("DUMP_LOGITS");
         if (!ldir || !*ldir) return;
-        float* lg = llama_get_logits_ith(ctx, 0);
-        int nv = llama_vocab_n_tokens(vocab);
+        float* lg = llama_get_logits_ith(R.ctx, 0);
+        int nv = llama_vocab_n_tokens(R.vocab);
         char lp[512];
         snprintf(lp, sizeof(lp), "%s/s%03d.f32", ldir, tag);
         FILE* lf = fopen(lp, "wb");
         if (lf) { fwrite(lg, sizeof(float), nv, lf); fclose(lf); }
     };
     for (int i = 0; i < n_gen; i++) {
-        if (mtp_k > 0) break;   // MTP path below owns generation
-        llama_token id = llama_sampler_sample(smpl, ctx, -1);
-        if (llama_vocab_is_eog(vocab, id)) break;
+        if (R.mtp_k > 0) break;   // MTP path below owns generation
+        llama_token id = llama_sampler_sample(smpl, R.ctx, -1);
+        if (llama_vocab_is_eog(R.vocab, id)) break;
         printf(" %d", id);
         fflush(stdout);
         produced++;
         fprintf(stderr, "[bench] step %d\n", i);
         cne::stream_set_step(i);
-        if (llama_decode(ctx, llama_batch_get_one(&id, 1))) {
+        if (llama_decode(R.ctx, llama_batch_get_one(&id, 1))) {
             fprintf(stderr, "\n[cne-bench] DECODE FAILED\n");
             return 1;
         }
@@ -431,9 +243,9 @@ int main(int argc, char** argv) {
     }
 
     // ---- MTP speculative decoding path (draft-mtp, greedy) ----
-    if (mtp_k > 0 && produced < n_gen) {
+    if (R.mtp_k > 0 && produced < n_gen) {
         auto stats = cne::spec_mtp_generate(
-                model, ctx, toks, mtp_k, mtp_p_min, n_gen - produced,
+                R.model, R.ctx, toks, R.mtp_k, mtp_p_min, n_gen - produced,
                 cne::stream_cb_eval(),
                 [](void* ud, llama_token id) {
                     fprintf((FILE*)ud, " %d", id);
@@ -454,7 +266,7 @@ int main(int argc, char** argv) {
                 "[mtp] draft=%.2fs process=%.2fs verify=%.2fs (spec wall %.2fs)\n"
                 "[mtp] per-iteration: draft %.0f ms | verify %.0f ms for %ld "
                 "rows (%.0f ms/row)\n"
-                "[mtp] effective: %.0f ms/token over %d tokens "
+                "[mtp] R.cache_cap: %.0f ms/token over %d tokens "
                 "(compare against your sequential arm)\n",
                 stats.draft_s, stats.process_s, stats.verify_s, spec_wall,
                 stats.iterations ? 1000.0 * stats.draft_s / stats.iterations : 0.0,
@@ -472,7 +284,7 @@ int main(int argc, char** argv) {
            snap1.minflt - snap0.minflt, snap1.majflt - snap0.majflt,
            snap1.rss_kib / 1048576.0, snap1.hwm_kib / 1048576.0);
 
-    auto st = cache.stats();
+    auto st = R.cache->stats();
     uint64_t gen_misses = st.misses - misses_before;
 
     cne::stream_check_windows();
@@ -485,12 +297,12 @@ int main(int argc, char** argv) {
            (unsigned long long)st.hits, (unsigned long long)st.misses);
     printf("gen-phase misses   : %llu (%.1f MiB/step)\n",
            (unsigned long long)gen_misses,
-           produced ? gen_misses * (double)manifest.tensors.front().bytes_per_expert /
+           produced ? gen_misses * (double)R.manifest.tensors.front().bytes_per_expert /
                           produced / 1048576.0
                     : 0.0);
     printf("bytes loaded       : %.2f MiB | evictions: %llu | used: %.2f / %zu MiB\n",
            st.bytes_loaded / 1048576.0, (unsigned long long)st.evictions,
-           cache.used_bytes() / 1048576.0, effective >> 10);
+           R.cache->used_bytes() / 1048576.0, R.cache_cap >> 10);
     printf("dedup requests     : %llu\n", (unsigned long long)st.dedup_requests);
     printf("audit checks run   : %ld | pending records: %zu\n",
            tel.audit_checks, tel.audit_pending);
@@ -503,7 +315,7 @@ int main(int argc, char** argv) {
                tel.l2_dropped, tel.l2_mass, tel.l2_min_k);
 
     llama_sampler_free(smpl);
-    llama_free(ctx);
-    llama_model_free(model);
+    llama_free(R.ctx);
+    llama_model_free(R.model);
     return 0;
 }

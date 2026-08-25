@@ -57,6 +57,24 @@ SpecStats spec_mtp_generate(llama_model* model,
     params.speculative.draft.ctx_dft = spec_init->context();
     llama_context* ctx_dft = params.speculative.draft.ctx_dft;
 
+    // seq-removal capability probe - DESTRUCTIVE (clears memory, decodes two
+    // dummy tokens, clears again). MUST run before prefill primes the target,
+    // and only once per process: repeating it after the prompt is decoded
+    // erases conditioning and the model outputs prior-driven text.
+    static bool  ckpt_probed       = false;
+    static bool  ckpt_use_tgt      = false;
+    static bool  ckpt_use_dft      = false;
+    if (!ckpt_probed) {
+        ckpt_use_tgt =
+            common_context_can_seq_rm(ctx) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        ckpt_use_dft = common_context_can_seq_rm(ctx_dft) ==
+                       COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        ckpt_probed = true;
+    }
+    const bool use_ckpt_tgt = ckpt_use_tgt;
+    const bool use_ckpt_dft = ckpt_use_dft;
+    common_prompt_checkpoint ckpt;
+
     std::unique_ptr<common_speculative, decltype(&common_speculative_free)>
         spec(common_speculative_init(params.speculative, 1),
              &common_speculative_free);
@@ -91,12 +109,6 @@ SpecStats spec_mtp_generate(llama_model* model,
     int n_past = (int) prompt.size() - 1;
 
     common_speculative_begin(spec.get(), 0, prompt_tgt);
-
-    const bool use_ckpt_tgt =
-        common_context_can_seq_rm(ctx) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-    const bool use_ckpt_dft =
-        common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-    common_prompt_checkpoint ckpt;
 
     common_sampler_ptr smpl(common_sampler_init(model, params.sampling));
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx), 0, 1);
@@ -204,6 +216,7 @@ SpecStats spec_mtp_generate(llama_model* model,
             step++;
             stream_set_step(step);
             if (llama_vocab_is_eog(vocab, id_last)) { stop = true; break; }
+            if (getenv("CNE_DEBUG_TOKIDS")) fprintf(stderr, "%d ", id_last);
             if (on_token)
                 on_token(ud, id_last);
             stats.produced++;

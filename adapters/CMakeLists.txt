@@ -1,5 +1,6 @@
 # Contains only integration glue — no product logic inside llama.cpp.
 add_library(cne_adapter STATIC
+    cne_runtime.cpp
     cne_stream_spec.cpp
     llama.cpp/cne_adapter.cpp
     cne_stream_cb.cpp)
