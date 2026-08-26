@@ -20,6 +20,10 @@ cmake --build build --target cne_prepare cne_setup cne_server -j
 `cne-setup` links only the engine core - it never loads a model, so it runs
 in seconds even before any artifact exists on disk.
 
+Debug builds: add `-DCNE_AUDIT=ON` to compile in the slice-audit and
+window-integrity verification machinery (see docs/FEATURES.md §10). Not
+needed for normal use.
+
 ## 2. Get a model
 
 If you have a GGUF already, place it under `models/`. For the reference

@@ -41,6 +41,16 @@ namespace {
 
 using Clock2 = std::chrono::steady_clock;
 
+// Diagnostic stderr prints ([geom], [cb], rebound notices) are gated behind
+// CNE_VERBOSE so production runs stay quiet; set CNE_VERBOSE=1 to restore.
+bool verbose() {
+    static const bool v = [] {
+        const char* e = cne::env("VERBOSE");
+        return e && *e && strcmp(e, "0") != 0;
+    }();
+    return v;
+}
+
 cne::DirectFile g_direct;
 bool g_use_odirect = false;
 std::unique_ptr<cne::IoScheduler> g_sched;
@@ -85,6 +95,10 @@ struct State {
     long step = -1;
 };
 
+// Slice-corruption audit: records every fill and memcmp-verifies the slice
+// at the consuming MUL_MAT_ID's post-compute edge. Divergence-hunting tool;
+// compile with -DCNE_AUDIT to enable.
+#ifdef CNE_AUDIT
 struct AuditRec {
     std::string tname;
     std::vector<int32_t> ids;
@@ -92,6 +106,7 @@ struct AuditRec {
     size_t bpe;
 };
 std::map<ggml_tensor*, AuditRec> g_audit;
+#endif
 
 // Router-ids tensors are NOT guaranteed contiguous (prefill rows are strided
 // in the graph pool): always gather via nb[] strides, never flat memcpy.
@@ -262,13 +277,14 @@ void ensure_window(const char* name, ggml_tensor* w) {
                 exit(1);
             }
             g.windows[name] = win;
-            fprintf(stderr,
-                    "[geom] %s manifest bpe=%zu total=%zu | runtime ne=[%lld,%lld,%lld] "
-                    "nb=[%zu,%zu,%zu,%zu] -> nb2=%zu type=%d size=%zu\n",
-                    name, (size_t)ti.bytes_per_expert, (size_t)ti.bytes_total,
-                    (long long)w->ne[0], (long long)w->ne[1], (long long)w->ne[2],
-                    (size_t)w->nb[0], (size_t)w->nb[1], (size_t)w->nb[2], (size_t)w->nb[3],
-                    (size_t)w->nb[2], (int)w->type, ggml_type_size(w->type));
+            if (verbose())
+                fprintf(stderr,
+                        "[geom] %s manifest bpe=%zu total=%zu | runtime ne=[%lld,%lld,%lld] "
+                        "nb=[%zu,%zu,%zu,%zu] -> nb2=%zu type=%d size=%zu\n",
+                        name, (size_t)ti.bytes_per_expert, (size_t)ti.bytes_total,
+                        (long long)w->ne[0], (long long)w->ne[1], (long long)w->ne[2],
+                        (size_t)w->nb[0], (size_t)w->nb[1], (size_t)w->nb[2], (size_t)w->nb[3],
+                        (size_t)w->nb[2], (int)w->type, ggml_type_size(w->type));
             if (g_full_fill) {
                 memcpy(win.base, win.orig, ti.bytes_total);
                 win.rebound = true;
@@ -290,7 +306,7 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
         if (!t)
             return true;
         static long cb_vis = 0;
-        if (++cb_vis <= 15 && t->name)
+        if (verbose() && ++cb_vis <= 15 && t->name)
             fprintf(stderr, "[cb] #%ld name='%s' op=%d\n",
                     cb_vis, t->name, (int)t->op);
         if (g_anon_scan) {   // ANON policy: one warmup pass observes every node
@@ -302,8 +318,8 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
         // ggml_top_k compiles to argsort + view: there is no TOP_K op node and
         // most nodes carry generic pool names - match op AND name prefix.
         const char* nm = t->name ? t->name : "";
-        const bool is_router = ask == false || true ? (t->op == GGML_OP_ARGSORT &&
-                               strncmp(nm, "ffn_moe_argsort", 15) == 0) : false;
+const bool is_router = t->op == GGML_OP_ARGSORT &&
+                       strncmp(nm, "ffn_moe_argsort", 15) == 0;
         bool is_mmid = t->op == GGML_OP_MUL_MAT_ID;
         if (!is_router && !is_mmid)
             return ask ? false : true;   // batch everything else
@@ -400,7 +416,8 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
 
         // ---- MUL_MAT_ID ----
         if (!ask) {
-            // post-compute audit / dumps
+#ifdef CNE_AUDIT
+            // post-compute audit: verify filled slices survived until use
             AuditRec rec;
             bool have = false;
             for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++)
@@ -410,7 +427,6 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
                     have = true;
                     break;
                 }
-            maybe_dump_dst(t, g.step);
             if (have && rec.step == g.step && !g_use_odirect) {
                 auto wit = g.windows.find(rec.tname);
                 if (wit != g.windows.end()) {
@@ -427,6 +443,8 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
                     }
                 }
             }
+#endif
+            maybe_dump_dst(t, g.step);
             return true;
         }
 
@@ -491,10 +509,13 @@ ggml_backend_sched_eval_callback stream_cb_eval() {
         if (!win.rebound && w->data != win.base) {
             w->data = win.base;
             win.rebound = true;
-            fprintf(stderr, "[cne] rebound %s\n", w->name);
+            if (verbose())
+                fprintf(stderr, "[cne] rebound %s\n", w->name);
         }
 
+#ifdef CNE_AUDIT
         g_audit[w] = {w->name, v, g.step, win.ti->bytes_per_expert};
+#endif
         if (g_step_fills) {
             char buf2[4096];
             int off = 0;
@@ -594,7 +615,11 @@ StreamTelemetry stream_telemetry() {
     t.fill_s        = g_fill_ns / 1e9;
     t.fill_calls    = g_fill_calls;
     t.audit_checks  = g_audit_checks;
+#ifdef CNE_AUDIT
     t.audit_pending = g_audit.size();
+#else
+    t.audit_pending = 0;
+#endif
     t.l2_dropped    = g_l2_dropped_slices;
     t.l2_mass       = g_l2_mass;
     t.l2_min_k      = g_l2_min_k;
@@ -606,6 +631,10 @@ void stream_check_windows() {
     // match the original mapping byte-for-byte (zeros where never touched
     // would mean the kernel read unfilled data; foreign writes reveal overlap).
     // Skipped in O_DIRECT mode: there is no mmap mirror to compare against.
+    // Compile with -DCNE_AUDIT to enable.
+#ifndef CNE_AUDIT
+    return;
+#else
     if (!g_rebind || g_full_fill || g_use_odirect)
         return;
     for (auto& [name, win] : g.windows) {
@@ -626,7 +655,9 @@ void stream_check_windows() {
             }
         }
     }
-    fprintf(stderr, "[integrity] window check done\n");
+    if (verbose())
+        fprintf(stderr, "[integrity] window check done\n");
+#endif
 }
 
 } // namespace cne

@@ -10,6 +10,7 @@ option(CNE_BUILD_SERVER "Build cne-server" OFF)
 option(CNE_BUILD_CLI "Build CLI tools" OFF)
 option(CNE_BUILD_TOOLS "Build developer tools (graph probe)" ON)
 option(CNE_WITH_LLAMA "Build pinned llama.cpp and the adapter seam" ON)
+option(CNE_AUDIT "Compile in the slice-audit + window-integrity debug machinery" OFF)
 
 add_library(cne INTERFACE)
 target_include_directories(cne INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)

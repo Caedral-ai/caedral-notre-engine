@@ -69,6 +69,7 @@ StreamTelemetry stream_telemetry();
 
 // Full-window integrity walk (memcpy mode only): every expert slice must
 // match the original mapping byte-for-byte. Prints findings to stderr.
+// Compiled in only with -DCNE_AUDIT (CMake: -DCNE_AUDIT=ON); no-op otherwise.
 void stream_check_windows();
 
 } // namespace cne

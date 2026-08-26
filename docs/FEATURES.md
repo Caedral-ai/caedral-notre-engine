@@ -276,10 +276,17 @@ These exist for engine work, not for end users:
 | `CNE_CTX`, `CNE_PROMPT` | context size / custom prompt |
 | `CNE_THREADS` | compute threads (default 8; 6 measured fastest on 4c/8t hardware) |
 | `CNE_KV_Q8` | q8_0 KV cache (measured CPU regression, kept for re-measurement) |
+| `CNE_VERBOSE` | restore the diagnostic stderr prints (`[geom]` window geometry, `[cb]` graph-node dump, `[cne] rebound` notices) that are silent by default in normal runs |
 | `CNE_DUMP_DST`, `CNE_DUMP_LOGITS(_EVERY)` | dump tensors/logits for divergence hunts |
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
+
+Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
+in the slice-corruption audit (per-fill records verified at the consuming
+matmul's post-compute edge, reported as `[audit] ... SLICE CORRUPT`) and the
+full-window integrity walk `stream_check_windows()`. Default builds compile
+these out entirely — zero overhead, and the integrity check is a no-op.
 
 ## The standing guarantees
 
