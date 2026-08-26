@@ -281,6 +281,7 @@ These exist for engine work, not for end users:
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
+| `CNE_SELF_SPEC=K` + `CNE_DRAFT_MODEL=path` | **experimental**, LFM2-class models only: subset-expert self-speculative drafting via a second artifact copy; greedy only; hard-disabled when MTP is active (see docs/models/lfm2-24b-a2b.md) |
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming
