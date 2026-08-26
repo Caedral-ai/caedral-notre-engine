@@ -855,6 +855,13 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[selfspec] depth set but no drafter available - disabled\n");
         g_engine.ss_depth = 0;
     }
+    // Owner ruling: speculation experiments are LFM-only; the Qwen serving
+    // profile (MTP) must never be displaced or altered.
+    if ((g_engine.ss_depth > 0) && g_engine.mtp_k > 0) {
+        fprintf(stderr, "[selfspec] conflicts with MTP - disabled "
+                        "(Qwen serving profile keeps MTP)\n");
+        g_engine.ss_depth = 0;
+    }
     if (rt->draft_ctx) {
         g_engine.ss_model = rt->draft_model;
         g_engine.ss_ctx   = rt->draft_ctx;
