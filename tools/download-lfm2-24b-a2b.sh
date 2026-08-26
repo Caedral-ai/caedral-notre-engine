@@ -14,7 +14,7 @@ set -eu
 
 REPO="LiquidAI/LFM2-24B-A2B-GGUF"
 FILE="LFM2-24B-A2B-Q4_K_M.gguf"
-EXPECTED_SHA256="SET_AFTER_FIRST_DOWNLOAD"
+EXPECTED_SHA256="eb4d2d4d4e61b795726c2f526c4434ca6bc725ad7a783691b58681f025cf58f2"
 MODEL_DIR="models/lfm2-24b-a2b"
 DEST="$MODEL_DIR/$FILE"
 URL="https://huggingface.co/$REPO/resolve/main/$FILE"
@@ -48,9 +48,9 @@ fi
 
 echo "[dl] verifying sha256 ..."
 GOT=$(sha256sum "$DEST" | cut -d' ' -f1)
-if [ "$EXPECTED_SHA256" = "SET_AFTER_FIRST_DOWNLOAD" ]; then
+if [ "$EXPECTED_SHA256" = "eb4d2d4d4e61b795726c2f526c4434ca6bc725ad7a783691b58681f025cf58f2" ]; then
     echo "[dl] NOTE: pinning hash on first download: $GOT"
-    sed -i "s/SET_AFTER_FIRST_DOWNLOAD/$GOT/" "$0"
+    sed -i "s/eb4d2d4d4e61b795726c2f526c4434ca6bc725ad7a783691b58681f025cf58f2/$GOT/" "$0"
 elif [ "$GOT" != "$EXPECTED_SHA256" ]; then
     echo "[dl] FATAL: sha256 mismatch (got $GOT, want $EXPECTED_SHA256)" >&2
     echo "[dl] corrupted download - delete $DEST and retry" >&2
