@@ -123,4 +123,9 @@ flash/token, hit-rate) from the benchmark protocol.
 
 - `third_party/llama.cpp` is pinned; bump via dedicated `build(llama.cpp): pin
   vX.Y.Z` commit including upstream-compat gate results.
+- **CNE llama fork (in progress):** kernel work (e.g. B3 MoE `MUL_MAT_ID`
+  repack paths) lands in the pinned submodule first; the submodule URL will move
+  from `ggml-org/llama.cpp` to a CNE-owned fork so patches survive bumps.
+  Product logic stays in `core/` and `adapters/` — never in the fork beyond
+  ggml-cpu compute hooks.
 - Prefer vendored/minimal deps; no heavyweight frameworks in core.
