@@ -31,8 +31,9 @@ on this chip (unlike Qwen, where 6 threads wins). Run-to-run variance
 
 | config | tok/s | notes |
 |---|---|---|
-| **warm dense, t4, ctx 4096** | **~10.9–11.0** | recommended serving profile |
-| warm dense, t4, 300 tok fixed | **10.84** | `CNE_IGNORE_EOS=1` bench-only knob |
+| **warm dense, t4, ctx 4096** | **~11.0–11.5** | recommended serving profile (B3 p3 fork) |
+| warm dense, t4, 300 tok fixed | **10.84** | pre-B3 `cne_bench`; re-bench after fork pin |
+| llama-bench tg128 (fork B3 p3) | **11.48 ± 0.46** | `cne/lfm2-b3` @ `8d2440243`, t4, pp512 warmup |
 | mmap cold, t4, first run | ~6.0 | majflt ~6k until page cache hot |
 | stream t4 | ~1.5 | hit-rate 52% — below the 0.90 rule; streaming OFF |
 | subset-expert self-spec | ~5 | closed negative; code removed |
@@ -57,6 +58,21 @@ One decode forward is dominated by Q4 matrix ops, not shortconv:
 Build audit: CNE already ships `-march=native`, OpenMP, and
 `GGML_USE_CPU_REPACK` (~5% vs repack off). No further cmake flag win
 measured on Tiger Lake.
+
+### B3 MoE kernel (2026-08-26, fork `cne/lfm2-b3`)
+
+LFM2 routes **top-4** experts (`expert_used_count=4`). Early B3 work gated on
+`n_ids==2` and did not apply. Phase 3 adds fused `4vx` GEMV (shared activation
+across 4 experts) plus q8 reuse for gate/up `MUL_MAT_ID` that share `src1`.
+
+| milestone | tg128 tok/s (`llama-bench`, t4) | notes |
+|---|---|---|
+| pre-B3 baseline | 10.35 ± 0.20 | slow path, 4 sequential expert GEMVs |
+| B3 p3 (`8d2440243`) | **11.48 ± 0.46** | +10.9%, identity gate PASS |
+
+Lossless: same greedy tokens as baseline (`cne_identity_gate`). Kernel work lives
+in `third_party/llama.cpp` branch `cne/lfm2-b3` (see `CONTRIBUTING.md`).
+Chronicle: `internal-docs/LFM2_VELOCITY_RESEARCH.md`.
 
 ## Subset-expert self-spec (spike closed, removed)
 

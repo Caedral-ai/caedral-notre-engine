@@ -119,9 +119,10 @@ beats 6/8 on the reference chip (opposite of Qwen). Full profile:
 
 | test | tok/s | tool / config |
 |---|---|---|
-| decode warm steady-state | **~10.9–11.0** | `cne_bench`, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096` |
-| decode fixed 300 tok | **10.84** | same + `CNE_IGNORE_EOS=1` (bench-only) |
-| decode tg128 | **9.26 ± 1.12** | `llama-bench`, mmap, t4 (kernel floor without warm dense) |
+| decode warm steady-state | **~11.0–11.5** | `cne_bench` / server, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096` |
+| decode tg128 (B3 p3 fork) | **11.48 ± 0.46** | `llama-bench`, t4, `cne/lfm2-b3` @ `8d2440243` |
+| decode fixed 300 tok | **10.84** | pre-B3 `cne_bench` run; re-measure after fork pin |
+| decode tg128 (pre-B3) | **9.26 ± 1.12** | `llama-bench`, mmap, t4 (kernel floor without warm dense) |
 | prefill pp512–4096 | **~41–44** | `llama-bench`, t4 |
 
 Decode is **~4× slower than prefill** on this stack. Q4 `MUL_MAT` +
