@@ -54,4 +54,22 @@ SpecStats spec_mtp_generate(llama_model* model,
                             void* ud,
                             int (*poll_stop)(void* ud) = nullptr);
 
+// Self-speculative drafting WITHOUT native MTP heads: the drafter is a
+// SECOND CONTEXT over a subset-expert copy of the same artifact (fewer
+// experts per token -> faster, approximate). Verification runs the full
+// model; greedy output is bit-identical to sequential decoding.
+//
+// Both contexts must be prefilled-ready (empty KV); prefill happens here.
+// Greedy contract: callers must gate on temperature == 0.
+SpecStats spec_selfspec_generate(llama_model* tgt_model,
+                                 llama_context* tgt_ctx,
+                                 llama_model* dft_model,
+                                 llama_context* dft_ctx,
+                                 const std::vector<llama_token>& prompt,
+                                 int n_draft,
+                                 int n_gen,
+                                 void (*on_token)(void* ud, llama_token id),
+                                 void* ud,
+                                 int (*poll_stop)(void* ud) = nullptr);
+
 } // namespace cne

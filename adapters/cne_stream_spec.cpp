@@ -246,4 +246,187 @@ SpecStats spec_mtp_generate(llama_model* model,
     return stats;
 }
 
+// ---- self-speculative (subset-expert drafter) --------------------------------
+// Mirrors the MTP arm's checkpoint machinery; the draft SOURCE differs: a
+// greedy rollout on a second context over a subset-expert copy of the
+// artifact instead of native MTP heads. Hybrid memories cannot be rewound
+// by position, so BOTH contexts checkpoint/restore every iteration.
+
+namespace {
+
+int argmax_row(llama_context* ctx, int idx, const llama_vocab* vocab) {
+    const float* logits = llama_get_logits_ith(ctx, idx);
+    int n_vocab = llama_vocab_n_tokens(vocab);
+    int best = 0;
+    float bv = logits[0];
+    for (int i = 1; i < n_vocab; i++)
+        if (logits[i] > bv) { bv = logits[i]; best = i; }
+    return best;
+}
+
+std::vector<llama_token> selfspec_rollout(llama_context* dft,
+                                          const llama_vocab* vocab,
+                                          llama_token cur, llama_pos pos0,
+                                          int k) {
+    std::vector<llama_token> out;
+    out.reserve(k);
+    llama_pos p = pos0;
+    for (int i = 0; i < k; i++) {
+        llama_batch b = llama_batch_init(1, 0, 1);
+        common_batch_add(b, cur, p, { 0 }, true);
+        bool ok = llama_decode(dft, b) == 0;
+        llama_batch_free(b);
+        if (!ok) {
+            fprintf(stderr, "\n[cne] DRAFT DECODE FAILED\n");
+            break;
+        }
+        cur = argmax_row(dft, 0, vocab);
+        out.push_back(cur);
+        p++;
+    }
+    return out;
+}
+
+} // namespace
+
+SpecStats spec_selfspec_generate(llama_model* tgt_model,
+                                 llama_context* tgt_ctx,
+                                 llama_model* dft_model,
+                                 llama_context* dft_ctx,
+                                 const std::vector<llama_token>& prompt,
+                                 int n_draft,
+                                 int n_gen,
+                                 void (*on_token)(void* ud, llama_token id),
+                                 void* ud,
+                                 int (*poll_stop)(void* ud)) {
+    SpecStats stats;
+    if (prompt.empty() || n_gen <= 0 || n_draft <= 0 || !dft_ctx || !dft_model)
+        return stats;
+
+    const auto* vocab = llama_model_get_vocab(tgt_model);
+
+    common_init();
+    common_params params;
+    params.sampling.temp = 0.0f;   // greedy contract
+
+    common_prompt_checkpoint ckpt;
+
+    long pn = (long)prompt.size() - 1;
+    const int nb = llama_n_batch(tgt_ctx);
+    for (long off = 0; off < pn; off += nb) {
+        int len = (int)std::min<long>(nb, pn - off);
+        llama_batch b = llama_batch_init(len, 0, 1);
+        for (int j = 0; j < len; j++)
+            common_batch_add(b, prompt[(size_t)(off + j)],
+                             (llama_pos)(off + j), { 0 }, false);
+        bool ok = llama_decode(tgt_ctx, b) == 0;
+        llama_batch_free(b);
+        if (!ok) {
+            fprintf(stderr, "\n[cne] PREFILL FAILED (selfspec target)\n");
+            return stats;
+        }
+    }
+    const int nbd = llama_n_batch(dft_ctx);
+    for (long off = 0; off < pn; off += nbd) {
+        int len = (int)std::min<long>(nbd, pn - off);
+        llama_batch b = llama_batch_init(len, 0, 1);
+        for (int j = 0; j < len; j++)
+            common_batch_add(b, prompt[(size_t)(off + j)],
+                             (llama_pos)(off + j), { 0 }, false);
+        bool ok = llama_decode(dft_ctx, b) == 0;
+        llama_batch_free(b);
+        if (!ok) {
+            fprintf(stderr, "\n[cne] PREFILL FAILED (selfspec drafter)\n");
+            return stats;
+        }
+    }
+
+    llama_token id_last = prompt.back();
+    llama_batch batch_tgt = llama_batch_init(llama_n_batch(tgt_ctx), 0, 1);
+    std::vector<llama_token> draft;
+    int n_past = (int)pn;
+
+    while (stats.produced < n_gen) {
+        if (poll_stop && poll_stop(ud)) break;
+
+        // Hybrid memories (conv/recurrent layers) cannot be rewound by
+        // position: checkpoint BOTH contexts every iteration and restore.
+        ckpt.update_pos(
+                n_past,
+                llama_memory_seq_pos_min(llama_get_memory(tgt_ctx), 0),
+                llama_memory_seq_pos_max(llama_get_memory(tgt_ctx), 0));
+        ckpt.update_tgt(tgt_ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        ckpt.update_dft(dft_ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        // ---- draft: greedy rollout on the subset-expert context ----
+        int n_draft_max = (int) llama_n_ctx(tgt_ctx) - n_past - 2;
+        n_draft_max = std::min(n_draft_max, n_gen - stats.produced - 1);
+        n_draft_max = std::min(n_draft_max, n_draft);
+        n_draft_max = std::max(n_draft_max, 0);
+
+        auto t_draft0 = std::chrono::steady_clock::now();
+        draft = selfspec_rollout(dft_ctx, vocab, id_last,
+                                 (llama_pos)n_past, n_draft_max);
+        stats.draft_s += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_draft0).count();
+        stats.drafted += (long)draft.size();
+
+        // unwind the drafter rollout from ITS memory; the drafted ids move
+        // into the target's verify batch instead
+        ckpt.load_dft(dft_ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        if (draft.empty()) break;
+
+        // ---- verify: one full-model forward over [id_last, drafts...] ----
+        common_batch_clear(batch_tgt);
+        common_batch_add(batch_tgt, id_last, n_past, { 0 }, true);
+        for (size_t i = 0; i < draft.size(); ++i)
+            common_batch_add(batch_tgt, draft[i], (llama_pos)(n_past + 1 + i),
+                             { 0 }, true);
+        if (llama_decode(tgt_ctx, batch_tgt)) {
+            fprintf(stderr, "\n[cne] VERIFY DECODE FAILED (selfspec)\n");
+            break;
+        }
+        stats.iterations++;
+
+        // greedy-verify: row r predicts the token at position n_past+r+1
+        std::vector<llama_token> predicted;
+        predicted.reserve(draft.size() + 1);
+        int a = 0;
+        for (size_t r = 0; r < draft.size(); r++) {
+            llama_token v = argmax_row(tgt_ctx, (int)r, vocab);
+            predicted.push_back(v);
+            if (v != draft[r]) break;
+            a++;
+            stats.accepted++;
+        }
+        predicted.push_back(argmax_row(tgt_ctx, a, vocab));
+        if (a < (int)draft.size()) stats.partials++;
+
+        bool stop = false;
+        for (int r = 0; r <= a && !stop; r++) {
+            llama_token t = predicted[(size_t)r];
+            stream_set_step(stats.produced);
+            if (llama_vocab_is_eog(vocab, t)) { stop = true; break; }
+            if (on_token)
+                on_token(ud, t);
+            stats.produced++;
+            id_last = t;
+        }
+
+        // restore BOTH contexts to the pre-iteration checkpoint; the last
+        // emitted token is re-decoded by the next iteration (target verify
+        // row 0 and drafter rollout step 0). One extra decode per iteration
+        // buys correct recurrent-state rewind on hybrid memories.
+        ckpt.load_tgt(tgt_ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        ckpt.load_dft(dft_ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (stop) break;
+        draft.clear();
+    }
+    llama_batch_free(batch_tgt);
+    llama_memory_clear(llama_get_memory(tgt_ctx), true);
+    llama_memory_clear(llama_get_memory(dft_ctx), true);
+    return stats;
+}
+
 } // namespace cne

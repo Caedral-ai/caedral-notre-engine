@@ -190,6 +190,36 @@ bool runtime_load_llama(Runtime& rt, const RuntimeSettings& s) {
     // keeps upstream's warmup-on behavior (same rule as the bench).
     if (rt.mtp_k == 0) llama_set_warmup(rt.ctx, false);
 
+    // Self-speculative drafter: a subset-expert copy of the artifact loaded
+    // plain - no demand-serving callback, no rebind machinery, mmap only.
+    if (s.draft_model_path) {
+        llama_model_params dmparams = llama_model_default_params();
+        dmparams.n_gpu_layers    = 0;
+        dmparams.use_extra_bufts = false;
+        fprintf(stderr, "[selfspec] loading drafter from '%s'\n", s.draft_model_path);
+        rt.draft_model = llama_model_load_from_file(s.draft_model_path, dmparams);
+        if (!rt.draft_model) {
+            fprintf(stderr, "[selfspec] DRAFT MODEL LOAD FAILED - disabled\n");
+        } else {
+            llama_context_params dcparams = llama_context_default_params();
+            dcparams.n_ctx         = rt.n_ctx;
+            dcparams.n_batch       = cparams.n_batch;
+            dcparams.n_ubatch      = cparams.n_ubatch;
+            dcparams.n_threads     = cparams.n_threads;
+            dcparams.n_threads_batch = cparams.n_threads_batch;
+            rt.draft_ctx = llama_init_from_model(rt.draft_model, dcparams);
+            if (!rt.draft_ctx) {
+                fprintf(stderr, "[selfspec] DRAFT CONTEXT FAILED - disabled\n");
+                llama_model_free(rt.draft_model);
+                rt.draft_model = nullptr;
+            } else {
+                llama_set_warmup(rt.draft_ctx, false);
+                fprintf(stderr, "[selfspec] drafter ready: %s\n",
+                        s.draft_model_path);
+            }
+        }
+    }
+
     if (rt.dense_policy_str == "anon") {
         stream_anon_scan_begin();
         llama_token b = llama_vocab_bos(rt.vocab);
@@ -205,6 +235,8 @@ bool runtime_load_llama(Runtime& rt, const RuntimeSettings& s) {
 
 void runtime_shutdown(Runtime& rt) {
     stream_prefetch_stop();
+    if (rt.draft_ctx) llama_free(rt.draft_ctx);
+    if (rt.draft_model) llama_model_free(rt.draft_model);
     if (rt.ctx) llama_free(rt.ctx);
     if (rt.model) llama_model_free(rt.model);
 }
