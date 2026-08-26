@@ -183,22 +183,21 @@ reference model.
 
 ```sh
 # build
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
 cmake --build build -j
 
-# fetch + align the reference model (~22.9 GB download, sha256-verified)
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
-
-# run: naive mmap baseline
-./build/tools/cne_bench \
-    models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
-    8 64 0 0
-
-# run: streaming mode (last arg 1 = stream ON)
-CNE_LANES=4 ./build/tools/cne_bench \
-    models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf \
-    8 64 0 1
+# fetch + align a model (both scripts verify sha256 and run cne_prepare)
+./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
+./tools/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
 ```
+
+Both models then appear in `cne_setup`'s artifact picker automatically.
+Recommended profiles:
+
+| model | total / active | profile | notes |
+|---|---|---|---|
+| Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
+| LFM2-24B-A2B | 24B / 2.3B | **no-stream** (naive mmap decode) | hybrid conv+attention; no MTP; fast sequential decode |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
