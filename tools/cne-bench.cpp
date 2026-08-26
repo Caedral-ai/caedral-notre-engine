@@ -221,10 +221,11 @@ int main(int argc, char** argv) {
         FILE* lf = fopen(lp, "wb");
         if (lf) { fwrite(lg, sizeof(float), nv, lf); fclose(lf); }
     };
+    const bool ignore_eos = cne::env("IGNORE_EOS") != nullptr;
     for (int i = 0; i < n_gen; i++) {
         if (R.mtp_k > 0) break;   // spec paths own generation
         llama_token id = llama_sampler_sample(smpl, R.ctx, -1);
-        if (llama_vocab_is_eog(R.vocab, id)) break;
+        if (!ignore_eos && llama_vocab_is_eog(R.vocab, id)) break;
         printf(" %d", id);
         fflush(stdout);
         produced++;
