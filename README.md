@@ -197,7 +197,7 @@ Recommended profiles:
 | model | total / active | profile | notes |
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
-| LFM2-24B-A2B | 24B / 2.3B | **no-stream** (naive mmap decode) | hybrid conv+attention; no MTP; sequential only |
+| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~11 tok/s warm on ref hardware |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.

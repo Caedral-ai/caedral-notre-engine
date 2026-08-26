@@ -111,10 +111,50 @@ Full feature guidance: [FEATURES.md](FEATURES.md).
 
 ## LFM2-24B-A2B (second artifact)
 
-No MTP head — sequential decode only. Warm naive profile on reference hardware:
-**~11 tok/s** (`CNE_STREAM=0`, 4 threads). See
+No MTP head — sequential decode only. Hybrid shortconv + MoE; **4 threads**
+beats 6/8 on the reference chip (opposite of Qwen). Full profile:
 [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md).
 
+### Measured (i5-1135G7, prepared Q4_K_M, 2026-08-26)
+
+| test | tok/s | tool / config |
+|---|---|---|
+| decode warm steady-state | **~10.9–11.0** | `cne_bench`, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096` |
+| decode fixed 300 tok | **10.84** | same + `CNE_IGNORE_EOS=1` (bench-only) |
+| decode tg128 | **9.26 ± 1.12** | `llama-bench`, mmap, t4 (kernel floor without warm dense) |
+| prefill pp512–4096 | **~41–44** | `llama-bench`, t4 |
+
+Decode is **~4× slower than prefill** on this stack. Q4 `MUL_MAT` +
+`MUL_MAT_ID` dominate the decode graph (~89% of heavy ops); shortconv
+(`SSM_CONV`) is ~1% of wall time in microbench.
+
+Build: Release with `-march=native`, `GGML_CPU_REPACK=ON` (CNE default).
+Repack OFF costs ~5% decode; an SSE4.2-only build costs **~2.7×** — do not
+ship generic x86 binaries for this model class.
+
+### Reproduce
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+./tools/download-lfm2-24b-a2b.sh
+
+# serving (recommended)
+CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
+  ./build/server/cne_server \
+  models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf
+
+# bench throughput (300-token fixed run)
+CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf \
+  0 300 32 0
+```
+
+**Measurement caveat:** `cne_bench` that restarts the process each run can
+show 5–6 tok/s with heavy majflt even when `CNE_DENSE=warm` is set — use a
+long-lived `cne_server` or `llama-bench tg` for clean decode probes unless
+the warm path is already resident.
+
 A 2026-08 subset-expert self-spec spike measured **~5 tok/s** (~2.2× slower
-than naive) despite passing the identity gate; code and probe artifacts were
-removed from the tree.
+than warm sequential) despite passing the identity gate; code and probe
+artifacts were removed from the tree.

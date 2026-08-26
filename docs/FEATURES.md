@@ -281,6 +281,7 @@ These exist for engine work, not for end users:
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
+| `CNE_IGNORE_EOS` | bench-only: keep generating after EOS for fixed-length throughput runs (does not change model math; not for serving) |
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming
