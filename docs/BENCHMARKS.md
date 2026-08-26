@@ -108,3 +108,13 @@ Notes:
   gating is inert on this model (flat routers)
 
 Full feature guidance: [FEATURES.md](FEATURES.md).
+
+## LFM2-24B-A2B (second artifact)
+
+No MTP head — sequential decode only. Warm naive profile on reference hardware:
+**~11 tok/s** (`CNE_STREAM=0`, 4 threads). See
+[models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md).
+
+A 2026-08 subset-expert self-spec spike measured **~5 tok/s** (~2.2× slower
+than naive) despite passing the identity gate; code and probe artifacts were
+removed from the tree.

@@ -173,8 +173,7 @@ int main(int argc, char** argv) {
         printf("\n");
     }
     if (R.mtp_k > 0) {
-        // MTP path below does its own two-phase prefill (n-1 tokens, then
-        // the last token together with the first verify batch).
+        // Speculative paths below do their own prefill.
     } else if (cne::env("SPLIT_PREFILL")) {
         // Bisect knob: same two-phase prefill shape as the MTP path
         // (n-1 tokens, then 1) WITHOUT any speculation.
@@ -223,7 +222,7 @@ int main(int argc, char** argv) {
         if (lf) { fwrite(lg, sizeof(float), nv, lf); fclose(lf); }
     };
     for (int i = 0; i < n_gen; i++) {
-        if (R.mtp_k > 0) break;   // MTP path below owns generation
+        if (R.mtp_k > 0) break;   // spec paths own generation
         llama_token id = llama_sampler_sample(smpl, R.ctx, -1);
         if (llama_vocab_is_eog(R.vocab, id)) break;
         printf(" %d", id);

@@ -118,10 +118,6 @@ struct Engine {
     bool               arch_qwen3    = false;  // enables the empty-think prefix
     std::string        chat_template;   // empty = model default template
     double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
-    int                ss_depth   = 0;  // CNE_SELF_SPEC draft depth; 0 = off
-    std::string        draft_path;      // CNE_DRAFT_MODEL artifact copy
-    llama_model*       ss_model = nullptr;
-    llama_context*     ss_ctx   = nullptr;
     std::mutex         gen_mutex;       // single-decode: serialize generation
 };
 
@@ -398,34 +394,6 @@ long long generate_mtp(Engine& eng, const std::vector<llama_token>& prompt,
     return emit.emitted;
 }
 
-// Self-speculative arm (subset-expert drafter). Greedy only: verification
-// makes output bit-identical to the sequential arm.
-long long generate_selfspec(Engine& eng, const std::vector<llama_token>& prompt,
-                            int n_draft, int n_gen, EmitCtx& emit,
-                            std::string& finish_reason) {
-    cne::SpecStats st = cne::spec_selfspec_generate(
-            eng.model, eng.ctx, eng.ss_model, eng.ss_ctx,
-            prompt, n_draft, n_gen,
-            emit_token_cb, &emit, request_poll_stop);
-
-    fprintf(stderr,
-            "[selfspec] iterations=%ld drafted=%ld accepted=%ld (%.1f%%) "
-            "partials=%ld produced=%d\n",
-            st.iterations, st.drafted, st.accepted,
-            st.drafted ? 100.0 * st.accepted / st.drafted : 0.0,
-            st.partials, st.produced);
-
-    if (st.produced <= 0 && finish_reason.empty()) {
-        fprintf(stderr, "[server] SELF-SPEC GENERATION FAILED\n");
-        finish_reason = "error";
-        return -1;
-    }
-    if (emit.stop_reason && finish_reason.empty()) finish_reason = "abort";
-    else if (finish_reason.empty())
-        finish_reason = st.produced < n_gen ? "stop" : "length";
-    return emit.emitted;
-}
-
 // ---- request handling ------------------------------------------------------------
 
 llama_sampler* build_sampler(float temp, float top_p, uint32_t seed) {
@@ -639,10 +607,7 @@ void handle_chat(httplib::Response& res, const json& body) {
         // generation runs on the engine thread; provider drains as chunks
         submit_job([st, &eng, n_gen, temperature]() {
             long long n =
-                eng.ss_depth > 0 && temperature <= 0.0f
-                    ? generate_selfspec(eng, st->prompt_tokens, eng.ss_depth,
-                                        n_gen, st->emit, st->finish_reason)
-                : eng.mtp_k > 0 && temperature <= 0.0f
+                eng.mtp_k > 0 && temperature <= 0.0f
                     ? generate_mtp(eng, st->prompt_tokens, n_gen, st->emit,
                                    &st->stream, st->finish_reason)
                     : generate_sequential(eng, st->prompt_tokens,
@@ -740,10 +705,7 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::condition_variable gen_cv;
 
     submit_job([&]() {
-        n = eng.ss_depth > 0 && temperature <= 0.0f
-                ? generate_selfspec(eng, prompt, eng.ss_depth, n_gen, emit,
-                                    finish_reason)
-            : eng.mtp_k > 0 && temperature <= 0.0f
+        n = eng.mtp_k > 0 && temperature <= 0.0f
                 ? generate_mtp(eng, prompt, n_gen, emit, nullptr, finish_reason)
                 : generate_sequential(eng, prompt, smpl, n_gen, emit, nullptr,
                                       finish_reason);
@@ -846,26 +808,8 @@ int main(int argc, char** argv) {
     rs.stream_on =
         cne::env("STREAM") ? atoi(cne::env("STREAM")) != 0 : true;
 
-    if (const char* v = cne::env("SELF_SPEC")) g_engine.ss_depth = atoi(v);
-    if (const char* v = cne::env("DRAFT_MODEL")) g_engine.draft_path = v;
-    rs.draft_model_path = g_engine.draft_path.c_str();
     auto rt = cne::runtime_prepare(rs);
     if (!rt || !cne::runtime_load_llama(*rt, rs)) return 1;
-    if ((g_engine.ss_depth > 0) && !rt->draft_ctx) {
-        fprintf(stderr, "[selfspec] depth set but no drafter available - disabled\n");
-        g_engine.ss_depth = 0;
-    }
-    // Owner ruling: speculation experiments are LFM-only; the Qwen serving
-    // profile (MTP) must never be displaced or altered.
-    if ((g_engine.ss_depth > 0) && g_engine.mtp_k > 0) {
-        fprintf(stderr, "[selfspec] conflicts with MTP - disabled "
-                        "(Qwen serving profile keeps MTP)\n");
-        g_engine.ss_depth = 0;
-    }
-    if (rt->draft_ctx) {
-        g_engine.ss_model = rt->draft_model;
-        g_engine.ss_ctx   = rt->draft_ctx;
-    }
     g_engine.mtp_k     = rt->mtp_k;
     g_engine.mtp_p_min =
         cne::env("MTP_P_MIN") ? (float)atof(cne::env("MTP_P_MIN")) : 0.0f;
@@ -904,14 +848,9 @@ int main(int argc, char** argv) {
     if (cne::env("THINK") && strcmp(cne::env("THINK"), "0") == 0)
         g_engine.think_default = false;
     if (const char* v = cne::env("MAX_REQ_S")) g_engine.max_req_s = atof(v);
-    if (const char* v = cne::env("SELF_SPEC")) g_engine.ss_depth = atoi(v);
-    if (const char* v = cne::env("DRAFT_MODEL")) g_engine.draft_path = v;
     if (g_engine.max_req_s > 0)
         fprintf(stderr, "[server] wall cap: %.0fs per request (CNE_MAX_REQ_S)\n",
                 g_engine.max_req_s);
-    if (g_engine.ss_depth > 0)
-        fprintf(stderr, "[selfspec] depth=%d drafter=%s\n", g_engine.ss_depth,
-                g_engine.draft_path.c_str());
 
     // handlers read engine state through the long-lived g_engine view
     g_engine.regime_str       = rt->regime_str;

@@ -14,7 +14,6 @@ namespace cne {
 
 struct RuntimeSettings {
     const char* model_path = nullptr;
-    const char* draft_model_path = nullptr;   // self-spec subset-expert copy
     size_t cap_gib   = 8;     // requested expert-cache GiB (budget-clamped)
     int    n_ctx     = 1024;  // default; CNE_CTX overrides
     int    n_threads = 8;     // default; CNE_THREADS overrides
@@ -37,10 +36,6 @@ struct Runtime {
     llama_context*     ctx   = nullptr;
     const llama_vocab* vocab = nullptr;
     int                n_ctx = 0;
-
-    // self-speculative drafter (subset-expert artifact copy), optional
-    llama_model*       draft_model = nullptr;
-    llama_context*     draft_ctx   = nullptr;
 };
 
 // Stages 1-2: manifest -> dense policy -> budget clamp -> cache/stream/O_DIRECT

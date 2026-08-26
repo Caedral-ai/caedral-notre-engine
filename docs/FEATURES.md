@@ -15,7 +15,7 @@ Quick decision table:
 | Model about the size of RAM | fault-free decode, bounded memory | anon-dense residency + budget manager |
 | Model 1-4x RAM | cache hot experts, stream cold ones | expert streaming + O_DIRECT |
 | Model 4-8x+ RAM | full streaming pipeline | expert streaming (core regime) |
-| Generation feels slow but memory is fine | draft multiple tokens per step | draft-MTP speculation |
+| Generation feels slow but memory is fine | draft multiple tokens per step | draft-MTP speculation (Qwen3.6 only) |
 | You accept a quality trade for speed | skip low-weight experts | expert-mass gating (lossy, opt-in) |
 | You want to verify quality yourself | measure perplexity directly | engine-ppl mode |
 
@@ -281,7 +281,6 @@ These exist for engine work, not for end users:
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
-| `CNE_SELF_SPEC=K` + `CNE_DRAFT_MODEL=path` | **experimental**, LFM2-class models only: subset-expert self-speculative drafting via a second artifact copy; greedy only; hard-disabled when MTP is active (see docs/models/lfm2-24b-a2b.md) |
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming

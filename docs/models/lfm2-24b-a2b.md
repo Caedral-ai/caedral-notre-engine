@@ -35,6 +35,18 @@ majflt ~20k/run in naive mode: hot set (~9.6 GiB touched of the 13.4 GiB
 file) exceeds MemAvailable (~10.4 GiB), so the page cache re-reads across
 runs. Expected at this ratio; streaming does not pay until ~1.6x RAM.
 
+## Subset-expert self-spec (spike closed, removed)
+
+A 2026-08 V1 spike tried training-free subset-expert drafting for LFM2 (no
+MTP head): a drafter with fewer active experts, full-model greedy verify.
+Identity gate passed; velocity gate failed — **~5 tok/s vs ~11 naive**
+(warm, `CNE_STREAM=0`, 4 threads). Native top-K is already short; shrinking
+K' cannot amortize draft+verify overhead on CPU.
+
+The experiment code and probe GGUF copies were removed from the tree
+(2026-08-26). LFM2 stays on naive sequential decode. Chronicle:
+`internal-docs/VELOCITY_II.md`.
+
 ## Operating profile (owner ruling: NO-STREAM)
 
 ```sh
