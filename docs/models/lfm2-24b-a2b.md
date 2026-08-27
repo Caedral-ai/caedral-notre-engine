@@ -97,7 +97,8 @@ server (HTTP + prefill dilute the kernel win). High run-to-run variance
 
 Lossless: same greedy tokens (`cne_identity_gate`). Code:
 `third_party/llama.cpp/ggml/src/ggml-cpu/repack.cpp` (~4483 q8 cache, ~4565
-fast path). Chronicle: `internal-docs/LFM2_VELOCITY_RESEARCH.md`.
+fast path). Chronicle: `internal-docs/LFM2_VELOCITY_RESEARCH.md` (history);
+active kernel playbook: `internal-docs/CPU_KERNELS.md`.
 
 #### A/B reproduce
 
