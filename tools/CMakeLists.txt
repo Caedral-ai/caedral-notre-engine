@@ -1,6 +1,9 @@
 add_executable(cne_graph_probe graph-probe.cpp)
 target_link_libraries(cne_graph_probe PRIVATE cne_core cne_runtime)
 
+add_executable(cne_graph_census graph-census.cpp)
+target_link_libraries(cne_graph_census PRIVATE llama)
+
 add_executable(cne_rebind_probe rebind-probe.cpp)
 target_link_libraries(cne_rebind_probe PRIVATE cne_core cne_runtime)
 

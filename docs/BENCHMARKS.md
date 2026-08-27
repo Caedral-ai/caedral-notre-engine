@@ -120,17 +120,19 @@ beats 6/8 on the reference chip (opposite of Qwen). Full profile:
 | test | tok/s | tool / config |
 |---|---|---|
 | decode warm steady-state | **~10.5–11.5** | `cne_server` / `cne_bench`, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4` |
-| decode tg128 (B3 on, 5-run mean) | **8.61 ± 0.31** | `llama-bench`, t4, 2026-08-27 re-measure |
-| decode tg128 (B3 off, 5-run mean) | 8.21 ± 0.24 | same; **+4.8%** B3 delta (not +11%) |
+| decode tg128 (`CNE_KERNELS=1`, 5-run mean) | **8.61 ± 0.31** | `llama-bench`, t4, 2026-08-27 |
+| decode tg128 (`CNE_KERNELS=0`, 5-run mean) | 8.21 ± 0.24 | same session |
+| decode tg250 (`CNE_KERNELS=1`, 5-run mean) | **9.50 ± 0.17** | `llama-bench`, t4, 2026-08-27 |
+| decode tg250 (`CNE_KERNELS=0`, 5-run mean) | 8.59 ± 0.15 | same session; **+10.6%** kernel delta |
 | decode tg128 (B3 p3 fork, single session) | **11.48 ± 0.46** | `cne/lfm2-b3` @ `8d2440243` — treat as upper bound, high variance |
-| server 1000 tok wall-clock | **~10.5** | `cne_server`; B3 on/off within noise at this length |
+| server 1000 tok wall-clock | **~10.5** | `cne_server`; kernels on/off within noise at this length |
 | decode fixed 300 tok | **10.84** | pre-B3 `cne_bench`; re-measure after fork pin |
 | decode tg128 (pre-B3, mmap) | **9.26 ± 1.12** | kernel floor without warm dense |
 | prefill pp512–4096 | **~41–44** | `llama-bench`, t4 |
 
-**B3 A/B scripts:** `bench/scripts/lfm2/tg128-microbench.sh` (tg128 microbench),
-`bench/scripts/lfm2/server-velocity.sh` (live HTTP). History TSVs under
-`bench/results/` (gitignored). See [bench/README.md](../bench/README.md).
+**Kernel A/B scripts:** `bench/scripts/lfm2/tg128-microbench.sh` (tg128),
+`llama-bench -n 250` for tg250 sweeps (see [bench/README.md](../bench/README.md)).
+History TSVs under `bench/results/` (gitignored).
 
 Decode is **~4× slower than prefill** on this stack. Q4 `MUL_MAT` +
 `MUL_MAT_ID` dominate the decode graph (~89% of heavy ops); shortconv
@@ -167,7 +169,7 @@ A 2026-08 subset-expert self-spec spike measured **~5 tok/s** (~2.2× slower
 than warm sequential) despite passing the identity gate; code and probe
 artifacts were removed from the tree.
 
-B4 prepare-time gate‖up fusion passed identity but was **slower than B3** and
-was reverted. Next lossless kernel work: true x86 AVX-VNNI `4vx`, down-proj
-`4vx`, router decode GEMV — see [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md)
-§ Kernel roadmap.
+B4 prepare-time gate‖up fusion passed identity but was **slower than the custom
+kernel path** and was reverted. Next lossless kernel work: shortconv GEMV (~14%
+decode wall per graph census), optional AVX-VNNI `4vx` inner loop — see
+[models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Kernel roadmap.

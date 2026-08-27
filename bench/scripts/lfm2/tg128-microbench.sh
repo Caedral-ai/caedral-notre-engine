@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# llama-bench tg128 decode probe for LFM2 (B3 A/B via CNE_MOE_B3).
+# llama-bench tg128 decode probe for LFM2 (custom kernels A/B via CNE_KERNELS).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -12,18 +12,18 @@ LOG="$RESULTS/lfm2-tg128.log"
 HISTORY="$RESULTS/lfm2-tg128.history.tsv"
 EXIT="$RESULTS/lfm2-tg128.exit"
 
-export CNE_MOE_B3="${CNE_MOE_B3:-1}"
+export CNE_KERNELS="${CNE_KERNELS:-1}"
 
 mkdir -p "$RESULTS"
 
 # Sweep: for i in {1..10}; do ./bench/scripts/lfm2/tg128-microbench.sh; done
 #        column -t bench/results/lfm2-tg128.history.tsv
 #
-# A/B: CNE_MOE_B3=0 ./bench/scripts/lfm2/tg128-microbench.sh
+# A/B: CNE_KERNELS=0 ./bench/scripts/lfm2/tg128-microbench.sh
 
 STARTED=$(date -Iseconds)
 rm -f "$EXIT"
-echo "=== llama-bench TG n=128 t=4 started ${STARTED} (B3=${CNE_MOE_B3}) ===" >> "$LOG"
+echo "=== llama-bench TG n=128 t=4 started ${STARTED} (CNE_KERNELS=${CNE_KERNELS}) ===" >> "$LOG"
 
 (
   echo 1000 > /proc/self/oom_score_adj
@@ -51,10 +51,10 @@ if [[ "$EXIT_CODE" -eq 0 ]]; then
 fi
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$STARTED" "$FINISHED" "$CNE_MOE_B3" "${TOK_S:-}" "${STDEV:-}" "$EXIT_CODE" >> "$HISTORY"
+  "$STARTED" "$FINISHED" "$CNE_KERNELS" "${TOK_S:-}" "${STDEV:-}" "$EXIT_CODE" >> "$HISTORY"
 
 if [[ -n "$TOK_S" ]]; then
-  echo "tg128: ${TOK_S} ± ${STDEV} tok/s (CNE_MOE_B3=${CNE_MOE_B3}, logged to ${HISTORY})"
+  echo "tg128: ${TOK_S} ± ${STDEV} tok/s (CNE_KERNELS=${CNE_KERNELS}, logged to ${HISTORY})"
 fi
 
 exit "$EXIT_CODE"

@@ -31,8 +31,9 @@ on this chip (unlike Qwen, where 6 threads wins). Run-to-run variance
 
 | config | tok/s | notes |
 |---|---|---|
-| **warm dense, t4, ctx 4096** | **~10.5–11.5** | `cne_server` wall clock; B3 on |
-| warm dense, t4, llama-bench tg128 | **~8.6–11.5** | high session variance; see B3 § |
+| **warm dense, t4, ctx 4096** | **~10.5–11.5** | `cne_server` wall clock; `CNE_KERNELS=1` |
+| warm dense, t4, llama-bench tg250 | **9.50 ± 0.17** | kernels on, 5-run mean (2026-08-27) |
+| warm dense, t4, llama-bench tg128 | **~8.6–11.5** | high session variance; see kernels § |
 | warm dense, t4, 300 tok fixed | **10.84** | pre-B3 `cne_bench`; re-bench after fork pin |
 | llama-bench tg128 (fork B3 p3) | **11.48 ± 0.46** | `cne/lfm2-b3` @ `8d2440243`, t4, pp512 warmup |
 | mmap cold, t4, first run | ~6.0 | majflt ~6k until page cache hot |
@@ -60,40 +61,39 @@ Build audit: CNE already ships `-march=native`, OpenMP, and
 `GGML_USE_CPU_REPACK` (~5% vs repack off). No further cmake flag win
 measured on Tiger Lake.
 
-### B3 MoE kernel (2026-08-26, fork `cne/lfm2-b3`)
+### Custom kernels (`CNE_KERNELS`, fork `cne/lfm2-b3`)
 
-LFM2 routes **top-4** experts (`expert_used_count=4`). Early B3 work gated on
-`n_ids==2` and did not apply. Phase 3 adds a `mul_mat_id` decode fast path for
-top-2/top-4, single-token batches (`ne11==1`, `ne12==1`), Q4_K repacked weights.
+LFM2 routes **top-4** experts (`expert_used_count=4`). The fork adds a
+`mul_mat_id` decode fast path for top-2/top-4, single-token batches
+(`ne11==1`, `ne12==1`), repacked Q4_K gate/up and Q6_K down weights.
 
-B3 is **three mechanisms**, not one fused SIMD kernel:
+All fork hooks share one runtime toggle:
+
+| `CNE_KERNELS` | behavior |
+|---|---|
+| `1` (default) | q8 activation cache + MoE dispatch + fused q4/q6 `2vx`/`4vx` GEMV |
+| `0` | stock llama.cpp `mul_mat_id` path (same greedy tokens) |
 
 | piece | what it does |
 |---|---|
+| q8 activation cache | Gate and up share `src1` on decode — second float→q8 quantize skipped |
 | Fast-path dispatch | Skips generic `mul_mat_id` row loop when top-K experts each have one row |
-| q8 activation cache | Gate and up share `src1` on decode — second float→q8 quantize is skipped |
-| `ggml_gemv_q4_K_8x8_q8_K_4vx` | Intended fused 4-expert GEMV |
+| `ggml_gemv_q4_K_8x8_q8_K_4vx` | Fused AVX2 gate/up GEMV (`arch/x86/repack_mmid.inl`) |
+| `ggml_gemv_q6_K_8x8_q8_K_4vx` | Fused AVX2 expert-down GEMV (`arch/x86/repack_q6k.inl`) |
 
-On **x86 (Tiger Lake)**, `4vx`/`2vx` have **no native implementation** —
-`arch-fallback.h` aliases them to `_generic`, which is four sequential calls to
-the existing single-expert `ggml_gemv_q4_K_8x8_q8_K` (AVX-VNNI in
-`arch/x86/repack.cpp`). Most measured B3 gain is therefore **q8 cache +
-dispatch**, not true multi-expert SIMD fusion.
-
-Toggle: `CNE_MOE_B3=1` (default) / `CNE_MOE_B3=0` (slow path, same tokens).
+Toggle: `CNE_KERNELS=1` (default) / `CNE_KERNELS=0` (stock llama.cpp).
 
 #### Measured velocity
 
-| session | test | B3 on | B3 off | delta |
+| session | test | kernels on | kernels off | delta |
 |---|---|---|---|---|
-| 2026-08-26 (fork pin) | `llama-bench` tg128, single sweep | **11.48 ± 0.46** | 10.35 ± 0.20 | +10.9% |
-| 2026-08-27 | `llama-bench` tg128, **5 runs/arm** | **8.61 ± 0.31** | 8.21 ± 0.24 | **+4.8%** |
-| 2026-08-27 | `cne_server`, 1000 tok × 3 | **10.44 ± 0.11** | 10.50 ± 0.11 | ~0% (noise) |
+| 2026-08-27 | `llama-bench` tg250, **5 runs/arm** | **9.50 ± 0.17** | 8.59 ± 0.15 | **+10.6%** |
+| 2026-08-27 | `llama-bench` tg128, **5 runs/arm** | **8.61 ± 0.31** | 8.21 ± 0.24 | +4.8% |
+| 2026-08-26 | `llama-bench` tg128, single sweep | 11.48 ± 0.46 | 10.35 ± 0.20 | +10.9% |
+| 2026-08-27 | `cne_server`, 1000 tok × 3 | 10.44 ± 0.11 | 10.50 ± 0.11 | ~0% (noise) |
 
-The original +11% figure was a single tight session. Re-measurement shows
-**~5% decode-only** on microbench and **no visible wall-clock gain** on live
-server (HTTP + prefill dilute the kernel win). High run-to-run variance
-(±15–20% cold; ±0.1–0.3 tok/s warm) — always sweep multiple runs.
+Use **tg250 5-run sweeps** as the primary kernel A/B probe; tg128 has higher
+variance. Live server wall clock dilutes the kernel win (HTTP + prefill).
 
 Lossless: same greedy tokens (`cne_identity_gate`). Code:
 `third_party/llama.cpp/ggml/src/ggml-cpu/repack.cpp` (~4483 q8 cache, ~4565
@@ -103,15 +103,78 @@ active kernel playbook: `internal-docs/kernels/CPU_KERNELS.md`.
 #### A/B reproduce
 
 ```sh
-# microbench (decode-only; stop server first to avoid OOM contention)
+# tg128 microbench (decode-only; stop server first to avoid OOM contention)
 for i in {1..5}; do ./bench/scripts/lfm2/tg128-microbench.sh; done
-for i in {1..5}; do CNE_MOE_B3=0 ./bench/scripts/lfm2/tg128-microbench.sh; done
+for i in {1..5}; do CNE_KERNELS=0 ./bench/scripts/lfm2/tg128-microbench.sh; done
 column -t bench/results/lfm2-tg128.history.tsv
 
-# live server (restart with matching CNE_MOE_B3)
-CNE_MOE_B3=1 CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
+# tg250 sweep (5 runs/arm; rebuild llama-bench from fork first)
+cmake --build /tmp/llama-bench-build --target llama-bench -j
+for k in 1 0; do for i in {1..5}; do
+  CNE_KERNELS=$k /tmp/llama-bench-build/bin/llama-bench \
+    -m models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf \
+    -t 4 -p 0 -n 250 -r 1 -b 512 -ub 512
+done; done
+
+# live server (restart with matching CNE_KERNELS)
+CNE_KERNELS=1 CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
   ./build/server/cne_server --config models/server.json
 CNE_BENCH_MAX_TOKENS=1000 ./bench/scripts/lfm2/server-velocity.sh
+```
+
+#### Compatibility
+
+Two levels: whether the **fork path runs at all**, and whether you get the
+**full fused AVX2 SIMD** (what the +10.6% tg250 number measures).
+
+**Path does not run** (stock llama `mul_mat_id` — same tokens, no speedup):
+
+| condition | why |
+|---|---|
+| `CNE_KERNELS=0` | explicit off |
+| upstream llama.cpp (not fork `cne/lfm2-b3`) | code not present |
+| GPU backend (CUDA / Metal / Vulkan) | hooks are `ggml-cpu` only |
+| prefill or batched decode (`ne11>1` or `ne12>1`) | fast path is single-token decode only |
+| MoE top-K not 2 or 4 | LFM2 uses top-4; other K values miss dispatch |
+| weights not repacked q4_K / q6_K (`GGML_CPU_REPACK` off) | needs `block_q4_K` / `block_q6_K`, 8×8 repack layout |
+| other models / graphs | MoE top-K not 2/4, fused gate‖up, or non-repacked quants |
+
+**Other likely-compatible models** (same `mul_mat_id` + top-4 MoE pattern; **not
+bench'd in CNE yet** — run `cne_identity_gate` before trusting velocity):
+
+| model | arch | top-K | notes |
+|---|---|---|---|
+| **LFM2-8B-A1B** | `lfm2moe` | 4 | Same family as 24B-A2B; [LiquidAI/LFM2-8B-A1B-GGUF](https://huggingface.co/LiquidAI/LFM2-8B-A1B-GGUF) |
+| **LFM2.5-8B-A1B** | `lfm2moe` | 4 | Successor checkpoint; same graph layout expected |
+| **SmallThinker** (1B / 4B / 20B MoE) | `smallthinker` | 4 | Separate gate/up/down experts; no shortconv — MoE hooks should match |
+
+Models with default top-K **8+** (e.g. Qwen3.6 MoE) do **not** hit the fast path
+unless metadata is overridden to 2 or 4 (changes routing — not recommended for
+lossless claims).
+
+**Path runs, partial speedup** (dispatch + q8 cache; fused `4vx` falls back to
+sequential single-expert GEMV):
+
+| machine / build | notes |
+|---|---|
+| x86 without AVX2 (pre-Haswell, or portable `-march` build) | compiles, no fused SIMD |
+| ARM / Apple Silicon (M-series, etc.) | no `arch/x86/repack_mmid.inl` / `repack_q6k.inl` |
+| RISC-V, POWER, `GGML_CPU_GENERIC` | generic fallbacks only |
+
+**Full speed** (reference: **+10.6%** tg250, i5-1135G7):
+
+| requirement |
+|---|
+| x86_64 + **AVX2** (Intel Haswell 2013+, AMD Zen+, Tiger Lake class) |
+| CNE fork `cne/lfm2-b3`, `GGML_CPU_REPACK=ON`, `CNE_KERNELS=1` |
+| LFM2 prepared Q4_K_M, **CPU decode**, single token, top-4 MoE |
+
+```
+CNE_KERNELS=0              → always stock llama
+CNE_KERNELS=1 + GPU        → stock (GPU matmul path)
+CNE_KERNELS=1 + prefill    → stock mul_mat_id loop
+CNE_KERNELS=1 + LFM2 decode + x86 AVX2 → full custom kernels
+CNE_KERNELS=1 + LFM2 decode + ARM/old x86 → partial (dispatch/cache only)
 ```
 
 ### B4 gate‖up fusion (closed negative, 2026-08)
@@ -123,14 +186,15 @@ unfused (428 tensors: separate `ffn_gate_exps` + `ffn_up_exps`).
 
 ### Kernel roadmap (lossless, next levers)
 
-Decode is ~89% Q4 `MUL_MAT` + `MUL_MAT_ID`. Closed or sub-5% elsewhere
-(streaming, self-spec, `CNE_FA`, shortconv ~1%, MTP N/A). Ranked next work:
+Per-op census (`cne_graph_census`, 2026-08-27): MoE gate/up **39%**, MoE down
+**27%**, shortconv **14%**, router **1%**. Custom kernels (q4+q6 fused GEMV)
+are **shipped** under `CNE_KERNELS`. Ranked next work:
 
-| priority | kernel | est. decode gain | status |
+| priority | kernel | est. decode bucket | status |
 |---|---|---|---|
-| 1 | **True x86 AVX-VNNI `4vx`** (one activation, 4 weight blocks) | 10–20% | not built — B3 calls generic 4× sequential today |
-| 2 | **Down-proj `4vx`** (`ffn_down_exps`, 3rd MoE matmul/layer) | 5–10% | not built |
-| 3 | **Router decode GEMV** (38 small `MUL_MAT`/token) | 3–8% | not built |
+| 1 | **Shortconv q4_K GEMV** | 14.1% wall | backlog |
+| 2 | **AVX-VNNI inner loop** for q4 `4vx` | incremental on shipped path | backlog |
+| 3 | **Router decode GEMV** | 1.1% wall | deprioritized |
 
 All require identity-gate PASS on `cne/lfm2-b3`. No lossy shortcut (`CNE_EXPERT_MASS`,
 self-spec, IQ4_XS) is recommended for this profile unless quality trade is explicit.
@@ -164,7 +228,7 @@ CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
 | `CNE_THREADS=4` | compute | best warm tok/s on this chip for LFM2 |
 | `CNE_CTX=4096` | context | 1024+ for long sessions; bench default 256 is too small |
 | `CNE_MTP` | unset | artifact has no MTP / nextn tensors |
-| `CNE_MOE_B3` | unset (on) | B3 `mul_mat_id` fast path; set `0` for A/B |
+| `CNE_KERNELS` | unset (on) | fork MoE decode kernels (+10.6% tg250); set `0` for stock llama A/B |
 | `CNE_FA` | off | no measurable gain at ctx 256–4096 on LFM2 |
 
 `CNE_DENSE=mmap` ties ~11 tok/s when the page cache is already hot and

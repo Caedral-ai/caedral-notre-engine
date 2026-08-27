@@ -40,6 +40,7 @@ Bisect and engine-development utilities — not required for serving:
 | Binary | Purpose |
 |---|---|
 | `cne_graph_probe` | Graph node inspection |
+| `cne_graph_census` | Decode-step op census + per-op wall time (kernel analysis) |
 | `cne_rebind_probe` | Window rebind behavior |
 | `cne_cb_semantics_probe` | Callback / fill semantics |
 | `cne_touch_recorder` | Tensor touch recording |

@@ -282,7 +282,41 @@ These exist for engine work, not for end users:
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
 | `CNE_IGNORE_EOS` | bench-only: keep generating after EOS for fixed-length throughput runs (does not change model math; not for serving) |
-| `CNE_MOE_B3` | LFM2 MoE decode fast path in `repack.cpp` (default **on**). Combines `mul_mat_id` top-2/top-4 dispatch, q8 activation cache (gate/up share `src1`), and `4vx` GEMV — on x86 `4vx` is currently generic (4× sequential single-expert GEMV). Set `CNE_MOE_B3=0` for A/B vs slow path; no math change. Measured ~+5% on `llama-bench` tg128; not visible on `cne_server` wall clock. Scripts: `bench/scripts/lfm2/tg128-microbench.sh`, `server-velocity.sh`. |
+| `CNE_KERNELS` | CNE custom ggml-cpu kernels in `repack.cpp` (default **on**). `1` = fork fast path (q8 activation cache, MoE `mul_mat_id` dispatch, fused q4/q6 `2vx`/`4vx` GEMV). `0` = stock llama.cpp path; same tokens, for A/B. Measured **+10.6%** on `llama-bench` tg250 (5 runs/arm, i5-1135G7, t4). Scripts: `bench/scripts/lfm2/tg128-microbench.sh`, `server-velocity.sh`. See **§ Custom kernels — compatibility** below. |
+
+### Custom kernels (`CNE_KERNELS`) — compatibility
+
+One toggle controls all fork hooks in `ggml-cpu/repack.cpp`. Tokens stay
+identical whether on or off; only the CPU kernel path changes.
+
+**Validated:** LFM2-24B-A2B prepared Q4_K_M (+10.6% tg250 vs `CNE_KERNELS=0`).
+
+**Likely compatible** (same top-4 MoE `mul_mat_id` pattern; not bench'd here yet):
+
+- **LFM2 MoE variants** — `lfm2moe` arch, e.g. LFM2-8B-A1B, LFM2.5-8B-A1B
+- **SmallThinker MoE** — `smallthinker` arch, `expert_used_count=4`, separate gate/up/down tensors
+
+Run `cne_identity_gate` on any new artifact before velocity claims.
+
+**Does not run** (falls back to stock llama `mul_mat_id`):
+
+- `CNE_KERNELS=0`, or build without the `cne/lfm2-b3` fork
+- GPU inference (CUDA / Metal / Vulkan) — CPU repack hooks are not used
+- Prefill / multi-token batches — fast path requires single-token decode (`ne11==1`, `ne12==1`)
+- MoE top-K other than 2 or 4
+- `GGML_CPU_REPACK` off, or non-repacked weight layouts
+
+**Runs with partial gain** (dispatch + q8 activation cache; no fused AVX2 `4vx`):
+
+- x86 CPUs without AVX2 at compile time
+- ARM / Apple Silicon, RISC-V, POWER, generic CPU builds
+
+**Full fused SIMD** (measured +10.6% tg250 vs `CNE_KERNELS=0`):
+
+- x86_64 + AVX2, fork build with `GGML_CPU_REPACK=ON`, `CNE_KERNELS=1`
+- LFM2-24B-A2B prepared Q4_K_M (or other likely-compatible MoE above), CPU-only decode
+
+Model-specific detail and decision tree: [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Compatibility.
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming

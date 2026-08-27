@@ -152,25 +152,33 @@ confirmed configuration for the server.
 
 ## Repository layout
 
+Full guide: **[docs/STRUCTURE.md](docs/STRUCTURE.md)**.
+
 ```
 core/include/cne/          public headers (model, memory, config…)
 core/src/                  engine library (cne_core)
   gguf/                    GGUF reader, tensor classification, manifest registry
   memory/                  memory budgets + regime classification
   features/streaming/      slice cache · O_DIRECT file · I/O lane scheduler
-runtime/                  llama.cpp seam + demand-serving runtime
-  seam/                    thin adapter entry (cne_adapter.*)
+runtime/                   llama.cpp seam + demand-serving runtime (cne_runtime)
+  seam/                    thin llama backend probe (cne_adapter.*)
   cne_runtime.cpp          shared boot sequence (bench + server)
   cne_stream_cb.cpp        demand-serving runtime (fills, cache, anon dense)
   cne_stream_spec.cpp      draft-MTP generation loop
-server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
-cli/                       cne_setup: first-run config (detect, suggest, confirm)
-tools/                     cne_prepare, cne_bench, identity gate, dev probes
-bench/                     velocity harness scripts + local results (see bench/README.md)
-tests/                     unit tests (gguf, streaming, memory, boot, perplexity)
-docs/                      FEATURES.md · SETUP.md · STRUCTURE.md · per-model notes
+server/                    cne_server — OpenAI-compatible HTTP/SSE endpoint
+cli/                       cne_setup — first-run config (detect, suggest, confirm)
+tools/                     shipped binaries + operator scripts
+  scripts/                 model download, canary, perplexity helpers
+  cne_prepare, cne_bench, cne_identity_gate, dev probes (see tools/README.md)
+bench/                     velocity harness scripts + local results (bench/README.md)
+tests/                     unit and integration tests
+  gguf/ memory/ features/streaming/   core library
+  boot/                    runtime boot sequence
+  perplexity/              PL drift-gate unit tests
+docs/                      FEATURES · SETUP · BENCHMARKS · STRUCTURE · per-model notes
 third_party/llama.cpp      pinned kernel fork (branch cne/lfm2-b3)
 models/                    local GGUF artifacts (gitignored)
+internal-docs/             private kernel/ops research (separate git repo, gitignored)
 ```
 
 ## Quick start
@@ -194,7 +202,7 @@ Recommended profiles:
 | model | total / active | profile | notes |
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
-| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~11.5 tok/s warm on ref hardware (B3 p3) |
+| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server, ~9.5 tg250 (`CNE_KERNELS=1`) |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.

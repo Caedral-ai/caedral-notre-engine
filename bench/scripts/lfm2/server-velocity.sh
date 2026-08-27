@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Live cne_server throughput: fixed max_tokens, wall-clock tok/s.
-# Requires server already running with matching CNE_MOE_B3 (restart after toggle).
+# Requires server already running with matching CNE_KERNELS (restart after toggle).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -8,7 +8,7 @@ cd "$ROOT"
 
 URL="${CNE_SERVER_URL:-http://127.0.0.1:8080}"
 MAX_TOKENS="${CNE_BENCH_MAX_TOKENS:-500}"
-export CNE_MOE_B3="${CNE_MOE_B3:-1}"
+export CNE_KERNELS="${CNE_KERNELS:-1}"
 RESULTS="${CNE_BENCH_RESULTS:-$ROOT/bench/results}"
 LOG="${CNE_BENCH_LOG:-$RESULTS/lfm2-server-velocity.log}"
 HISTORY="${CNE_BENCH_HISTORY:-$RESULTS/lfm2-server-velocity.history.tsv}"
@@ -21,7 +21,7 @@ PAYLOAD=$(cat <<EOF
 EOF
 )
 
-echo "=== server velocity started ${STARTED} (CNE_MOE_B3=${CNE_MOE_B3}, max_tokens=${MAX_TOKENS}) ===" >> "$LOG"
+echo "=== server velocity started ${STARTED} (CNE_KERNELS=${CNE_KERNELS}, max_tokens=${MAX_TOKENS}) ===" >> "$LOG"
 
 T0=$(date +%s.%N)
 RESP=$(curl -sf -H 'Content-Type: application/json' -d "$PAYLOAD" "${URL}/v1/chat/completions")
@@ -60,10 +60,10 @@ if [[ ! -s "$HISTORY" ]]; then
 fi
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$STARTED" "$FINISHED" "$CNE_MOE_B3" "$MAX_TOKENS" "$USAGE_COMP" "$ELAPSED" "${TOK_S:-}" "$FINISH_REASON" >> "$HISTORY"
+  "$STARTED" "$FINISHED" "$CNE_KERNELS" "$MAX_TOKENS" "$USAGE_COMP" "$ELAPSED" "${TOK_S:-}" "$FINISH_REASON" >> "$HISTORY"
 
 if [[ -n "$TOK_S" ]]; then
-  echo "server: ${TOK_S} tok/s (${USAGE_COMP} tokens in ${ELAPSED}s, CNE_MOE_B3=${CNE_MOE_B3})"
+  echo "server: ${TOK_S} tok/s (${USAGE_COMP} tokens in ${ELAPSED}s, CNE_KERNELS=${CNE_KERNELS})"
 else
   echo "server: could not compute tok/s (see ${LOG})"
   exit 1

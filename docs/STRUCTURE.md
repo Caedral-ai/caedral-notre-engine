@@ -50,7 +50,7 @@ CMake target: `cne_runtime` (static library).
 | Kind | Location |
 |---|---|
 | Shipped binaries | Built by CMake: `cne_prepare`, `cne_bench`, `cne_identity_gate` |
-| Dev probes | `cne_graph_probe`, `cne_rebind_probe`, … |
+| Dev probes | `cne_graph_probe`, `cne_graph_census`, `cne_rebind_probe`, … |
 | Operator scripts | `tools/scripts/` — model download, canary, perplexity helpers |
 | Quality harness | `drift_gate.py` (used by canary + `tests/perplexity/`) |
 
