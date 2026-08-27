@@ -3,6 +3,10 @@ build-*/
 .cache/
 compile_commands.json
 
+# benchmark outputs (scripts live in bench/scripts/)
+bench/results/*
+!bench/results/.gitkeep
+
 # editors / os
 .vscode/
 .idea/

@@ -282,6 +282,7 @@ These exist for engine work, not for end users:
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
 | `CNE_IGNORE_EOS` | bench-only: keep generating after EOS for fixed-length throughput runs (does not change model math; not for serving) |
+| `CNE_MOE_B3` | LFM2 MoE decode fast path in `repack.cpp` (default **on**). Combines `mul_mat_id` top-2/top-4 dispatch, q8 activation cache (gate/up share `src1`), and `4vx` GEMV — on x86 `4vx` is currently generic (4× sequential single-expert GEMV). Set `CNE_MOE_B3=0` for A/B vs slow path; no math change. Measured ~+5% on `llama-bench` tg128; not visible on `cne_server` wall clock. Scripts: `bench/scripts/lfm2/tg128-microbench.sh`, `server-velocity.sh`. |
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming

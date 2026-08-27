@@ -154,26 +154,23 @@ confirmed configuration for the server.
 
 ```
 core/include/cne/          public headers (model, memory, config…)
-core/src/gguf/             GGUF reader, tensor classification, manifest registry
-core/src/memory/           memory budgets + regime classification
-core/src/features/
-  streaming/               slice cache · O_DIRECT file · I/O lane scheduler
-adapters/                  llama.cpp seam:
-                             cne_runtime.cpp     shared boot sequence (bench+server)
-                             cne_stream_cb.cpp   demand-serving runtime
-                             cne_stream_spec.cpp draft-MTP generation loop
+core/src/                  engine library (cne_core)
+  gguf/                    GGUF reader, tensor classification, manifest registry
+  memory/                  memory budgets + regime classification
+  features/streaming/      slice cache · O_DIRECT file · I/O lane scheduler
+adapters/                  llama.cpp seam + demand-serving runtime
+  llama.cpp/               thin adapter entry
+  cne_runtime.cpp          shared boot sequence (bench + server)
+  cne_stream_cb.cpp        demand-serving runtime (fills, cache, anon dense)
+  cne_stream_spec.cpp      draft-MTP generation loop
 server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
-cli/                       user-facing CLIs:
-                             cne_setup       first-run config (detect, suggest, confirm)
-tools/                     drivers & probes:
-                             cne_bench       end-to-end bench
-                             cne_prepare     GGUF alignment tool
-                             cne_identity_gate  correctness harness
-tests/features/            unit tests mirroring core areas
-tests/runtime/             shared boot-sequence tests
-docs/                      FEATURES.md · SETUP.md (server setup guide) ·
-                           per-model notes
-third_party/               llama.cpp (pinned upstream submodule)
+cli/                       cne_setup: first-run config (detect, suggest, confirm)
+tools/                     cne_prepare, cne_bench, identity gate, dev probes
+bench/                     velocity harness scripts + local results (see bench/README.md)
+tests/                     unit tests (gguf, streaming, memory, runtime, pl)
+docs/                      FEATURES.md · SETUP.md · per-model notes
+third_party/llama.cpp      pinned kernel fork (branch cne/lfm2-b3)
+models/                    local GGUF artifacts (gitignored)
 ```
 
 ## Quick start
