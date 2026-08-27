@@ -9,7 +9,7 @@
 # artifact is still aligned so the streaming path stays available for A/B.
 #
 # Usage:
-#   ./tools/download-lfm2-24b-a2b.sh
+#   ./tools/scripts/download-lfm2-24b-a2b.sh
 set -eu
 
 REPO="LiquidAI/LFM2-24B-A2B-GGUF"

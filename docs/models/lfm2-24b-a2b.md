@@ -14,7 +14,7 @@ architecture validated on the engine.
 | Context | 32,768 native |
 | MTP | none — sequential arm only (`mtp_k=0`) |
 | Template | ChatML-like via the model's own Jinja; no think blocks |
-| Download | `./tools/download-lfm2-24b-a2b.sh` (fetch + align, resumable) |
+| Download | `./tools/scripts/download-lfm2-24b-a2b.sh` (fetch + align, resumable) |
 
 ## Validation (2026-08-25, i5-1135G7 / 16 GB)
 
@@ -97,8 +97,8 @@ server (HTTP + prefill dilute the kernel win). High run-to-run variance
 
 Lossless: same greedy tokens (`cne_identity_gate`). Code:
 `third_party/llama.cpp/ggml/src/ggml-cpu/repack.cpp` (~4483 q8 cache, ~4565
-fast path). Chronicle: `internal-docs/LFM2_VELOCITY_RESEARCH.md` (history);
-active kernel playbook: `internal-docs/CPU_KERNELS.md`.
+fast path). Chronicle: `internal-docs/chronicles/LFM2_VELOCITY_RESEARCH.md` (history);
+active kernel playbook: `internal-docs/kernels/CPU_KERNELS.md`.
 
 #### A/B reproduce
 
@@ -145,7 +145,7 @@ shrinking K' cannot amortize draft+verify overhead on CPU.
 
 The experiment code and probe GGUF copies were removed from the tree
 (2026-08-26). LFM2 stays on naive sequential decode. Chronicle:
-`internal-docs/VELOCITY_II.md`.
+`internal-docs/kernels/VELOCITY_II.md`.
 
 ## Operating profile (owner ruling: NO-STREAM)
 

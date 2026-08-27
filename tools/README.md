@@ -10,12 +10,28 @@ CMake target `CNE_BUILD_TOOLS=ON` (default) builds everything below.
 | `cne_bench` | End-to-end throughput + identity checks |
 | `cne_identity_gate` | Token-exact greedy parity harness |
 
-Download helpers (shell, not CMake):
+## Operator scripts (`scripts/`)
+
+Shell helpers — run from the repo root:
 
 | Script | Purpose |
 |---|---|
-| `download-qwen3.6-35b-a3b-q4_k_xl.sh` | Fetch + verify + prepare Qwen artifact |
-| `download-lfm2-24b-a2b.sh` | Fetch + verify + prepare LFM2 artifact |
+| `scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh` | Fetch + verify + prepare Qwen artifact |
+| `scripts/download-lfm2-24b-a2b.sh` | Fetch + verify + prepare LFM2 artifact |
+| `scripts/run-canary.sh` | PL-T1 long-gen canary (lossless vs lossy + drift gate) |
+| `scripts/run-ppl.sh` | Perplexity over PTB corpus via `build-meas` llama-perplexity |
+
+Example:
+
+```sh
+./tools/scripts/download-lfm2-24b-a2b.sh
+./tools/scripts/run-canary.sh 7 2048 2304
+```
+
+## Quality harness
+
+`drift_gate.py` — token/logit drift checks for lossy-vs-lossless comparisons.
+Used by `scripts/run-canary.sh` and `tests/perplexity/test_drift_gate.py`.
 
 ## Development probes
 

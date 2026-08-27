@@ -19,7 +19,7 @@ mkdir -p "$OUT/ref" "$OUT/cand"
 run_arm() {  # $1 rebind  $2 outprefix  $3 extra env
     systemd-run --user --scope -p MemoryMax=$SCOPE_MEM \
         env CNE_CTX=$CTX CNE_LANES=4 CNE_DUMP_LOGITS_EVERY=16 $3 \
-        "$DIR/../build/tools/cne_bench" "$MODEL" "$CAP" "$GEN" 0 "$1" \
+        "$DIR/../../build/tools/cne_bench" "$MODEL" "$CAP" "$GEN" 0 "$1" \
         > "$OUT/$2.toks" 2> "$OUT/$2.err"
 }
 
@@ -28,11 +28,11 @@ run_arm 0 ref ""
 echo "[canary] arm 2/2: lossy candidate"
 run_arm 1 cand "$QUALITY_FLAGS"
 
-python3 "$DIR/drift_gate.py" canary \
+python3 "$DIR/../drift_gate.py" canary \
     "$OUT/ref.toks" "$OUT/cand.toks" \
     --min-tokens "$((GEN / 2))" \
     --loop-period-max "${LOOP_PERIOD_MAX:-24}" \
     --loop-repeat-min "${LOOP_REPEAT_MIN:-8}"
-python3 "$DIR/drift_gate.py" logits \
+python3 "$DIR/../drift_gate.py" logits \
     --ref-dir "$OUT/ref" --cand-dir "$OUT/cand" \
     ${KL_BAND:+--kl-band "$KL_BAND"} ${KL_MAX:+--kl-max "$KL_MAX"}

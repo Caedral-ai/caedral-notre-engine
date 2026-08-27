@@ -29,7 +29,7 @@ artifact runs on machines with far less RAM via R3/R4 streaming.
 | Size | 22.9 GB download → 21.3 GiB after `cne_prepare` alignment |
 
 ```sh
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # fetch + sha256 verify + prepare
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # fetch + sha256 verify + prepare
 ```
 
 ## Measured velocity gains
@@ -78,7 +78,7 @@ partial rounds across all published runs.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh
 
 # baseline: naive mmap
 CNE_THREADS=6 ./build/tools/cne_bench \
@@ -144,7 +144,7 @@ ship generic x86 binaries for this model class.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-./tools/download-lfm2-24b-a2b.sh
+./tools/scripts/download-lfm2-24b-a2b.sh
 
 # serving (recommended)
 CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \

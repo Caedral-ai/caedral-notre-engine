@@ -6,7 +6,7 @@
 # O_DIRECT streaming. Resumable; verifies sha256 after download.
 #
 # Usage:
-#   ./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
+#   ./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh
 set -eu
 
 REPO="unsloth/Qwen3.6-35B-A3B-MTP-GGUF"

@@ -127,7 +127,7 @@ flash/token, hit-rate) from the benchmark protocol.
   [trycaedral/llama.cpp](https://github.com/trycaedral/llama.cpp) branch
   `cne/lfm2-b3` (submodule URL in `.gitmodules`). Upstream sync remote:
   `upstream` → `ggml-org/llama.cpp`. Product logic stays in `core/` and
-  `adapters/` — never in the fork beyond ggml-cpu compute hooks.
+  `runtime/` — never in the fork beyond ggml-cpu compute hooks.
   LFM2 MoE hooks live in `ggml-cpu/repack.cpp` (`CNE_MOE_B3` toggle).
   x86 `4vx`/`2vx` are generic today — native AVX-VNNI fusion is the next
   kernel milestone (see `docs/models/lfm2-24b-a2b.md` § Kernel roadmap).

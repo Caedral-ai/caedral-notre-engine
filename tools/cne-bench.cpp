@@ -3,7 +3,7 @@
 // ask-point. Reports tok/s, hit-rate, cold MiB/step, evictions - comparable
 // against offline LRU simulation curves.
 //
-// The demand-serving runtime lives in adapters/stream_cb.cpp behind the
+// The demand-serving runtime lives in runtime/cne_stream_cb.cpp behind the
 // cne_stream_cb.h API; this file is only a measurement driver.
 #include "cne/cache.h"
 #include "cne/io_scheduler.h"

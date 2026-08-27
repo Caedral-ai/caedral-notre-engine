@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Model-free unit tests for tools/drift_gate.py (PL-T1).
+"""Model-free unit tests for tools/drift_gate.py (perplexity / PL-T1).
 Runs standalone: python3 test_drift_gate.py  (exit 0 = all passed)."""
 import importlib.util
 import math

@@ -158,8 +158,8 @@ core/src/                  engine library (cne_core)
   gguf/                    GGUF reader, tensor classification, manifest registry
   memory/                  memory budgets + regime classification
   features/streaming/      slice cache · O_DIRECT file · I/O lane scheduler
-adapters/                  llama.cpp seam + demand-serving runtime
-  llama.cpp/               thin adapter entry
+runtime/                  llama.cpp seam + demand-serving runtime
+  seam/                    thin adapter entry (cne_adapter.*)
   cne_runtime.cpp          shared boot sequence (bench + server)
   cne_stream_cb.cpp        demand-serving runtime (fills, cache, anon dense)
   cne_stream_spec.cpp      draft-MTP generation loop
@@ -167,8 +167,8 @@ server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
 cli/                       cne_setup: first-run config (detect, suggest, confirm)
 tools/                     cne_prepare, cne_bench, identity gate, dev probes
 bench/                     velocity harness scripts + local results (see bench/README.md)
-tests/                     unit tests (gguf, streaming, memory, runtime, pl)
-docs/                      FEATURES.md · SETUP.md · per-model notes
+tests/                     unit tests (gguf, streaming, memory, boot, perplexity)
+docs/                      FEATURES.md · SETUP.md · STRUCTURE.md · per-model notes
 third_party/llama.cpp      pinned kernel fork (branch cne/lfm2-b3)
 models/                    local GGUF artifacts (gitignored)
 ```
@@ -184,8 +184,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=
 cmake --build build -j
 
 # fetch + align a model (both scripts verify sha256 and run cne_prepare)
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
-./tools/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
+./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
 ```
 
 Both models then appear in `cne_setup`'s artifact picker automatically.

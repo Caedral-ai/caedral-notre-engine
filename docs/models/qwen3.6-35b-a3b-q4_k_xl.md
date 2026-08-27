@@ -20,7 +20,7 @@
 | Downloaded size | 22,853,663,008 bytes (~21.3 GiB) |
 | GGUF architecture key | `qwen35moe` |
 | Tensors | 753 (includes MTP prediction head) |
-| Regeneration script | `tools/download-qwen3.6-35b-a3b-q4_k_xl.sh` |
+| Regeneration script | `tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh` |
 
 ## 2. Tensor-type census (prepared variant)
 

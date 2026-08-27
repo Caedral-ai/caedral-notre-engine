@@ -30,8 +30,8 @@ If you have a GGUF already, place it under `models/`. For the reference
 artifact:
 
 ```sh
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # reference model (~22.9 GB)
-./tools/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B, no-stream profile (~14.4 GB)
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # reference model (~22.9 GB)
+./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B, no-stream profile (~14.4 GB)
 ```
 
 Both scripts verify sha256 and run the one-time alignment pass
