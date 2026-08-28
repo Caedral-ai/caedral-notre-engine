@@ -192,7 +192,7 @@ are **shipped** under `CNE_KERNELS`. Ranked next work:
 
 | priority | kernel | est. decode bucket | status |
 |---|---|---|---|
-| 1 | **Shortconv q4_K GEMV** | 14.1% wall | backlog |
+| 1 | **Shortconv decode `MUL_MAT`** | ~4% wall (post-MoE) | **partial** — `mul_mat_decode.inl` skips chunk pool |
 | 2 | **AVX-VNNI inner loop** for q4 `4vx` | incremental on shipped path | backlog |
 | 3 | **Router decode GEMV** | 1.1% wall | deprioritized |
 
