@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -38,8 +39,16 @@ void w_tensor_info(FILE *f, const std::string &name, std::vector<uint64_t> dims,
 
 // Minimal v3 GGUF: 2 layers worth of tensors, arch "testmoe", 4 experts.
 std::string write_fixture(const std::string &path, bool expert_axis_last = true, bool corrupt_magic = false) {
+    const auto parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+    }
     FILE *f = fopen(path.c_str(), "wb");
-    assert(f);
+    if (!f) {
+        fprintf(stderr, "write_fixture: cannot open %s\n", path.c_str());
+        std::exit(1);
+    }
     uint32_t magic = corrupt_magic ? 0xdeadbeef : 0x46554747;
     uint32_t version = 3;
     uint64_t n_tensors = 5;
