@@ -122,16 +122,18 @@ beats 6/8 on the reference chip (opposite of Qwen). Full profile:
 | decode warm steady-state | **~10.5–11.5** | `cne_server` / `cne_bench`, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4` |
 | decode tg128 (`CNE_KERNELS=1`, 5-run mean) | **8.61 ± 0.31** | `llama-bench`, t4, 2026-08-27 |
 | decode tg128 (`CNE_KERNELS=0`, 5-run mean) | 8.21 ± 0.24 | same session |
-| decode tg250 (`CNE_KERNELS=1`, 5-run mean) | **9.50 ± 0.17** | `llama-bench`, t4, 2026-08-27 |
-| decode tg250 (`CNE_KERNELS=0`, 5-run mean) | 8.59 ± 0.15 | same session; **+10.6%** kernel delta |
+| decode tg250 (`CNE_KERNELS=1`, 5-rep) | **11.92 ± 0.42** | `llama-bench`, t4, pp512, `21767de7d`, 2026-08-28 |
+| decode tg250 (`CNE_KERNELS=0`, 5-rep) | 10.61 ± 0.13 | same session; **+12.3%** kernel delta |
+| decode tg250 (`CNE_KERNELS=1`, 5-run mean) | **9.50 ± 0.17** | `llama-bench`, t4, 2026-08-27 (prior session) |
+| decode tg250 (`CNE_KERNELS=0`, 5-run mean) | 8.59 ± 0.15 | prior session; **+10.6%** |
 | decode tg128 (custom kernels, single session) | **11.48 ± 0.46** | `cne/cpu-kernels` @ `8d2440243` — treat as upper bound, high variance |
 | server 1000 tok wall-clock | **~10.5** | `cne_server`; kernels on/off within noise at this length |
 | decode fixed 300 tok | **10.84** | pre-B3 `cne_bench`; re-measure after fork pin |
 | decode tg128 (pre-B3, mmap) | **9.26 ± 1.12** | kernel floor without warm dense |
 | prefill pp512–4096 | **~41–44** | `llama-bench`, t4 |
 
-**Kernel A/B scripts:** `bench/scripts/lfm2/tg128-microbench.sh` (tg128),
-`llama-bench -n 250` for tg250 sweeps (see [bench/README.md](../bench/README.md)).
+**Kernel A/B scripts:** `bench/scripts/lfm2/tg250-kernel-ab.sh` (canonical tg250),
+`bench/scripts/lfm2/tg128-microbench.sh` (tg128 smoke).
 History TSVs under `bench/results/` (gitignored).
 
 Decode is **~4× slower than prefill** on this stack. Q4 `MUL_MAT` +
