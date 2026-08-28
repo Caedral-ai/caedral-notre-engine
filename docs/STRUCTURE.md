@@ -30,7 +30,8 @@ Public API: `core/include/cne/`. Implementation under `core/src/`:
 | `features/streaming/` | Slice cache, O_DIRECT I/O, lane scheduler |
 
 **Rule:** no llama.cpp includes in `core/`. No product logic in
-`third_party/llama.cpp` beyond ggml-cpu compute hooks.
+`third_party/llama.cpp` beyond ggml-cpu compute hooks. Custom CPU kernels
+live under `third_party/llama.cpp/ggml/src/ggml-cpu/cne/` (see `cne/README.md`).
 
 ## runtime/
 
