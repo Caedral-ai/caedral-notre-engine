@@ -125,7 +125,7 @@ flash/token, hit-rate) from the benchmark protocol.
   vX.Y.Z` commit including upstream-compat gate results.
 - **CNE llama fork:** kernel work lands on
   [trycaedral/llama.cpp](https://github.com/trycaedral/llama.cpp) branch
-  `cne/lfm2-b3` (submodule URL in `.gitmodules`). Upstream sync remote:
+  `cne/cpu-kernels` (submodule URL in `.gitmodules`). Upstream sync remote:
   `upstream` → `ggml-org/llama.cpp`. Product logic stays in `core/` and
   `runtime/` — never in the fork beyond ggml-cpu compute hooks.
   LFM2 custom kernels live in `ggml-cpu/repack.cpp` (`CNE_KERNELS` toggle).

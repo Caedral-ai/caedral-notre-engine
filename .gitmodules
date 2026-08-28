@@ -1,4 +1,4 @@
 [submodule "third_party/llama.cpp"]
 	path = third_party/llama.cpp
 	url = https://github.com/trycaedral/llama.cpp
-	branch = cne/lfm2-b3
+	branch = cne/cpu-kernels

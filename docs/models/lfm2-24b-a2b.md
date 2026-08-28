@@ -35,7 +35,7 @@ on this chip (unlike Qwen, where 6 threads wins). Run-to-run variance
 | warm dense, t4, llama-bench tg250 | **9.50 ± 0.17** | kernels on, 5-run mean (2026-08-27) |
 | warm dense, t4, llama-bench tg128 | **~8.6–11.5** | high session variance; see kernels § |
 | warm dense, t4, 300 tok fixed | **10.84** | pre-B3 `cne_bench`; re-bench after fork pin |
-| llama-bench tg128 (fork B3 p3) | **11.48 ± 0.46** | `cne/lfm2-b3` @ `8d2440243`, t4, pp512 warmup |
+| llama-bench tg128 (custom kernels) | **11.48 ± 0.46** | `cne/cpu-kernels` @ `8d2440243`, t4, pp512 warmup |
 | mmap cold, t4, first run | ~6.0 | majflt ~6k until page cache hot |
 | stream t4 | ~1.5 | hit-rate 52% — below the 0.90 rule; streaming OFF |
 | subset-expert self-spec | ~5 | closed negative; code removed |
@@ -61,7 +61,7 @@ Build audit: CNE already ships `-march=native`, OpenMP, and
 `GGML_USE_CPU_REPACK` (~5% vs repack off). No further cmake flag win
 measured on Tiger Lake.
 
-### Custom kernels (`CNE_KERNELS`, fork `cne/lfm2-b3`)
+### Custom kernels (`CNE_KERNELS`, fork `cne/cpu-kernels`)
 
 LFM2 routes **top-4** experts (`expert_used_count=4`). The fork adds a
 `mul_mat_id` decode fast path for top-2/top-4, single-token batches
@@ -132,7 +132,7 @@ Two levels: whether the **fork path runs at all**, and whether you get the
 | condition | why |
 |---|---|
 | `CNE_KERNELS=0` | explicit off |
-| upstream llama.cpp (not fork `cne/lfm2-b3`) | code not present |
+| upstream llama.cpp (not fork `cne/cpu-kernels`) | code not present |
 | GPU backend (CUDA / Metal / Vulkan) | hooks are `ggml-cpu` only |
 | prefill or batched decode (`ne11>1` or `ne12>1`) | fast path is single-token decode only |
 | MoE top-K not 2 or 4 | LFM2 uses top-4; other K values miss dispatch |
@@ -166,7 +166,7 @@ sequential single-expert GEMV):
 | requirement |
 |---|
 | x86_64 + **AVX2** (Intel Haswell 2013+, AMD Zen+, Tiger Lake class) |
-| CNE fork `cne/lfm2-b3`, `GGML_CPU_REPACK=ON`, `CNE_KERNELS=1` |
+| CNE fork `cne/cpu-kernels`, `GGML_CPU_REPACK=ON`, `CNE_KERNELS=1` |
 | LFM2 prepared Q4_K_M, **CPU decode**, single token, top-4 MoE |
 
 ```
@@ -196,7 +196,7 @@ are **shipped** under `CNE_KERNELS`. Ranked next work:
 | 2 | **AVX-VNNI inner loop** for q4 `4vx` | incremental on shipped path | backlog |
 | 3 | **Router decode GEMV** | 1.1% wall | deprioritized |
 
-All require identity-gate PASS on `cne/lfm2-b3`. No lossy shortcut (`CNE_EXPERT_MASS`,
+All require identity-gate PASS on `cne/cpu-kernels`. No lossy shortcut (`CNE_EXPERT_MASS`,
 self-spec, IQ4_XS) is recommended for this profile unless quality trade is explicit.
 
 ## Subset-expert self-spec (spike closed, removed)

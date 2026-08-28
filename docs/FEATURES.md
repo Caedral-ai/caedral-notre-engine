@@ -300,7 +300,7 @@ Run `cne_identity_gate` on any new artifact before velocity claims.
 
 **Does not run** (falls back to stock llama `mul_mat_id`):
 
-- `CNE_KERNELS=0`, or build without the `cne/lfm2-b3` fork
+- `CNE_KERNELS=0`, or build without the `cne/cpu-kernels` fork
 - GPU inference (CUDA / Metal / Vulkan) — CPU repack hooks are not used
 - Prefill / multi-token batches — fast path requires single-token decode (`ne11==1`, `ne12==1`)
 - MoE top-K other than 2 or 4

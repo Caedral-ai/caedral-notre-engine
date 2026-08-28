@@ -176,7 +176,7 @@ tests/                     unit and integration tests
   boot/                    runtime boot sequence
   perplexity/              PL drift-gate unit tests
 docs/                      FEATURES · SETUP · BENCHMARKS · STRUCTURE · per-model notes
-third_party/llama.cpp      pinned kernel fork (branch cne/lfm2-b3)
+third_party/llama.cpp      pinned kernel fork (branch cne/cpu-kernels)
 models/                    local GGUF artifacts (gitignored)
 internal-docs/             private kernel/ops research (separate git repo, gitignored)
 ```
