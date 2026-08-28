@@ -103,7 +103,7 @@ Users state intent; the engine resolves settings:
 | Memory budget manager | ![](https://img.shields.io/badge/status-working-brightgreen) | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%) |
-| Mixed-precision serving | ![](https://img.shields.io/badge/status-designed-blue) | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
+| Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
 | OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` on the extracted runtime; single session; MTP-enabled |
 
 Full per-feature guidance — including when *not* to use each one — lives in
