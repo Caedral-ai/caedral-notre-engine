@@ -254,6 +254,7 @@ step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 | Variable | Values | Effect |
 |---|---|---|
 | `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
+| `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
 | `CNE_LANES` | N | parallel slice-read workers (default 4) |
 | `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k) |
 | `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |

@@ -81,7 +81,8 @@ All fork hooks share one runtime toggle:
 | `ggml_gemv_q4_K_8x8_q8_K_4vx` | Fused AVX2 gate/up GEMV (`arch/x86/repack_mmid.inl`) |
 | `ggml_gemv_q6_K_8x8_q8_K_4vx` | Fused AVX2 expert-down GEMV (`arch/x86/repack_q6k.inl`) |
 
-Toggle: `CNE_KERNELS=1` (default) / `CNE_KERNELS=0` (stock llama.cpp).
+Toggle: `CNE_KERNELS=1` (default) / `CNE_KERNELS=0` (stock llama.cpp), or
+`"kernels": true/false` in `models/server.json` (via `cne_setup`).
 
 #### Measured velocity
 
@@ -228,7 +229,7 @@ CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
 | `CNE_THREADS=4` | compute | best warm tok/s on this chip for LFM2 |
 | `CNE_CTX=4096` | context | 1024+ for long sessions; bench default 256 is too small |
 | `CNE_MTP` | unset | artifact has no MTP / nextn tensors |
-| `CNE_KERNELS` | unset (on) | fork MoE decode kernels (+10.6% tg250); set `0` for stock llama A/B |
+| `kernels` / `CNE_KERNELS` | on (`true` in `server.json`) | fork MoE + decode matmul kernels (+12.3% tg250); `0`/`false` for stock A/B |
 | `CNE_FA` | off | no measurable gain at ctx 256–4096 on LFM2 |
 
 `CNE_DENSE=mmap` ties ~11 tok/s when the page cache is already hot and

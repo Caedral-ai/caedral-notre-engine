@@ -46,10 +46,10 @@ struct ConfigKnob {
 
 const ConfigKnob g_config_knobs[] = {
     {"stream", "STREAM"},       {"think", "THINK"},
-    {"mtp", "MTP"},             {"mtp_p_min", "MTP_P_MIN"},
-    {"threads", "THREADS"},     {"ctx", "CTX"},
-    {"cache_gib", "CACHE_GIB"}, {"dense", "DENSE"},
-    {"max_req_s", "MAX_REQ_S"},
+    {"kernels", "KERNELS"},     {"mtp", "MTP"},
+    {"mtp_p_min", "MTP_P_MIN"}, {"threads", "THREADS"},
+    {"ctx", "CTX"},             {"cache_gib", "CACHE_GIB"},
+    {"dense", "DENSE"},         {"max_req_s", "MAX_REQ_S"},
 };
 
 // model_out stays empty when the config does not name one (argv supplies it).

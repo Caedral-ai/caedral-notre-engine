@@ -120,8 +120,8 @@ Suggestions come from measurements on the reference machine/hardware class
   stays off in R3+
 - **threads** - physical-core count beats SMT for both decode arms
 - **ctx 1024 floor** - MTP aborts near token ~250 below this
-- **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, 4 threads,
-  ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
+- **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, kernels on,
+  4 threads, ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
   `docs/models/lfm2-24b-a2b.md`
 
 You can override any of them; nothing changes model math silently.
@@ -135,6 +135,7 @@ Written where you pointed `--config` (default `models/server.json`):
   "ctx": 1024,
   "dense": "mmap",
   "host": "127.0.0.1",
+  "kernels": true,
   "max_req_s": 0.0,
   "model": "qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf",
   "mtp": 8,
@@ -166,6 +167,7 @@ Every applied key is logged with its source at boot:
 
 ```
 [config] loaded models/server.json
+[config] KERNELS    = 1 (config)
 [config] MTP        = 8 (config)
 [config] THREADS    kept env override
 listening on http://127.0.0.1:8080 ...

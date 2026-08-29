@@ -356,13 +356,15 @@ Server-specific knobs:
 |---|---|
 | `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
 | `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
+| `CNE_KERNELS=0` | stock llama.cpp ggml-cpu path (A/B); default on when unset |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
 
 The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >
 built-in default, and every resolved knob is logged with its source at
-boot. See **docs/SETUP.md**.
+boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
+`ctx`, `think`, `cache_gib`, `max_req_s`. See **docs/SETUP.md**.
 
 Behavior notes:
 

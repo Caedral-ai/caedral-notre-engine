@@ -39,7 +39,7 @@ bool valid_value(const std::string& key, const std::string& v,
         return !s.empty() && s.find_first_not_of("0123456789") ==
                                  std::string::npos;
     };
-    if (key == "stream" || key == "think")
+    if (key == "stream" || key == "think" || key == "kernels")
         err = "on | off";
     else if (key == "dense")
         err = "mmap | warm | anon";
@@ -58,7 +58,7 @@ bool valid_value(const std::string& key, const std::string& v,
         return true;
 
     if (v.empty()) return true;   // '!' cleared -> engine default
-    if (key == "stream" || key == "think") {
+    if (key == "stream" || key == "think" || key == "kernels") {
         if (v != "on" && v != "off" && v != "0" && v != "1") return false;
         return true;
     }
@@ -141,6 +141,9 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
         deep ? "model far above RAM - streaming is the product here"
              : "cache holds the hot set at this regime; naive mmap decode "
                "measured equal-or-better");
+
+    add("kernels", "custom CPU kernels", "on",
+        "fork ggml-cpu fast path; off = stock llama A/B");
 
     add("dense", "dense residency",
         (has_mtp && !deep) ? "mmap" : "",
@@ -336,7 +339,7 @@ int main(int argc, char** argv) {
     int mtp_k = 0;
     for (const auto& it : items) {
         if (it.value.empty()) continue;
-        if (it.key == "stream" || it.key == "think")
+        if (it.key == "stream" || it.key == "think" || it.key == "kernels")
             cfg[it.key] = (it.value == "on" || it.value == "1" ||
                            it.value == "true");
         else if (it.key == "threads" || it.key == "ctx" || it.key == "port")
@@ -366,15 +369,19 @@ int main(int argc, char** argv) {
     auto kv = [&](const char* name, const std::string& v) {
         envs += std::string(name) + "=" + v + " ";
     };
+    auto env_on = [](const std::string& v) {
+        return (v == "on" || v == "1" || v == "true") ? "1" : "0";
+    };
     for (const auto& it : items) {
         if (it.value.empty()) continue;
-        if (it.key == "stream")         kv("CNE_STREAM", it.value == "on" ? "1" : "0");
+        if (it.key == "stream")         kv("CNE_STREAM", env_on(it.value));
+        else if (it.key == "kernels")   kv("CNE_KERNELS", env_on(it.value));
         else if (it.key == "dense")     kv("CNE_DENSE", it.value);
         else if (it.key == "mtp")       kv("CNE_MTP", it.value);
         else if (it.key == "threads")   kv("CNE_THREADS", it.value);
         else if (it.key == "ctx")       kv("CNE_CTX", it.value);
         else if (it.key == "cache_gib") kv("CNE_CACHE_GIB", it.value);
-        else if (it.key == "think")     kv("CNE_THINK", it.value == "on" ? "1" : "0");
+        else if (it.key == "think")     kv("CNE_THINK", env_on(it.value));
         else if (it.key == "max_req_s") kv("CNE_MAX_REQ_S", it.value);
     }
     if (mtp_k > 0) kv("CNE_MTP_P_MIN", "0.5");
