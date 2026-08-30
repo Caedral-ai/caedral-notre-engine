@@ -148,6 +148,27 @@ lossless configuration measured on this hardware class.
 **Avoid when:** serving multiple concurrent requests — draft overhead does
 not parallelize as well as plain decode.
 
+**Incompatible with conversation sessions (`conversation_id`).** On
+`cne_server`, MTP and multi-turn KV reuse are **mutually exclusive** — pick
+one per deployment (`CNE_MTP=0` for chat sessions; unset `conversation_id`
+when MTP is on). When `CNE_MTP>0`, the server ignores `conversation_id` and
+runs stateless (full prefill + KV clear every request). Reasons:
+
+1. **Two KV caches** — MTP keeps target and draft contexts in sync; session
+   reuse only tracks the target. Resuming a chat would leave the drafter on
+   stale state.
+2. **KV rollbacks** — MTP trims rejected draft tails with `seq_rm` and
+   checkpoints mid-generation; sessions assume a stable prefix that only
+   grows (or trims on history edit).
+3. **Separate code paths** — `spec_mtp_generate()` always full-prefills;
+   it does not call incremental `session_prefill()`.
+4. **Serving hazard** — upstream draft-MTP can degrade across back-to-back
+   requests (#26425); sessions intentionally retain KV, which would compound
+   that risk.
+
+A combined MTP+sessions mode is possible later (draft sync + parity tests);
+not supported in v1. See also §11 (server sessions).
+
 **Streaming interaction (measured 2026-08-24 at ~1.4x RAM):** speculation's
 advantage decays as cache hit-rate drops, for three reasons:
 
@@ -362,11 +383,16 @@ Server-specific knobs:
 | `CNE_SESSION=0` | disable conversation KV reuse (default on when `conversation_id` is sent) |
 | `CNE_SESSION_MAX=N` | LRU cap on tracked conversations (default 8) |
 
-Multi-turn KV reuse (T2): send the same `conversation_id` on each turn (JSON
+Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
 tail; logs `[session] reused=N prefilled=M`. Omit `conversation_id` for
 stateless behavior (full prefill every request). `clear_conversation: true`
-drops cached KV for that id. Incompatible with MTP (`CNE_MTP>0`).
+drops cached KV for that id.
+
+**Requires `CNE_MTP=0` (or unset).** Sessions and draft-MTP cannot be
+combined on the server — see §5 for why. Use sequential decode for
+multi-turn or multi-user chat; use MTP only for stateless single-shot
+requests.
 
 The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >

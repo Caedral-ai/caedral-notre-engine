@@ -102,9 +102,9 @@ Users state intent; the engine resolves settings:
 | Dense residency policies | ![](https://img.shields.io/badge/status-working-brightgreen) | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
 | Memory budget manager | ![](https://img.shields.io/badge/status-working-brightgreen) | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
-| Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%) |
+| Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
 | Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
-| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` on the extracted runtime; single session; MTP-enabled |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health`; optional multi-turn KV reuse via `conversation_id`; requests serialize (one decode at a time) |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -240,12 +240,26 @@ curl http://localhost:8080/v1/chat/completions \
     -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
 ```
 
-Single session: requests serialize. Greedy by default (lossless);
+Single decode slot: requests serialize. Greedy by default (lossless);
 `temperature`/`top_p`/`seed` honored per request. Disable thinking with
 `CNE_THINK=0` or per-request `"chat_template_kwargs":{"enable_thinking":false}`.
 Abandoned streaming requests abort within one poll interval instead of
 hogging the engine slot; `CNE_MAX_REQ_S=<seconds>` adds an optional wall
-cap per request. Full endpoint/knob reference in `docs/FEATURES.md` §11;
+cap per request.
+
+**Chat sessions vs MTP** — choose one per `server.json` / env, not both:
+
+| Goal | Config |
+|---|---|
+| Multi-turn or multi-user chat (`conversation_id`) | `CNE_MTP=0` (default) |
+| Speculative decode speed (stateless) | `CNE_MTP=k`, no `conversation_id` |
+
+With MTP on, the server ignores `conversation_id` and clears KV after every
+request. Sessions need sequential decode so KV can be reused safely; MTP uses
+dual contexts and mid-step KV rollbacks that session bookkeeping does not
+track yet. Full rationale: **[docs/FEATURES.md](docs/FEATURES.md)** §5 and §11.
+
+Full endpoint/knob reference in `docs/FEATURES.md` §11;
 step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 
 <details>
@@ -256,8 +270,10 @@ step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 | `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
 | `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
 | `CNE_LANES` | N | parallel slice-read workers (default 4) |
-| `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k) |
+| `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k); **incompatible with server `conversation_id` sessions** |
 | `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |
+| `CNE_SESSION` | `0` | disable conversation KV reuse on the server (default on when `conversation_id` is sent) |
+| `CNE_SESSION_MAX` | N | LRU cap on tracked conversations (default 8) |
 | `CNE_THREADS` | N | compute threads (default 8); physical-core count beats SMT on many laptops |
 | `CNE_FA` | set = on | flash attention; ~+3% at ctx 1024, scales with context |
 | `CNE_KV_Q8` | set = on | q8_0 KV cache; measured CPU regression on the reference machine, kept for re-measurement |
@@ -292,6 +308,10 @@ plain greedy decoding — speedup without changing results. Quality loss of
 the tuned config (`CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6`) is 0%;
 the lossy expert-mass knob never activates on this model (measured:
 zero dropped slices), and KV q8_0 was rejected as a CPU regression.
+
+On `cne_server`, do not enable MTP when using `conversation_id` for
+multi-turn chat — the two modes are mutually exclusive (see **Chat sessions
+vs MTP** above and `docs/FEATURES.md` §5).
 
 ## Roadmap
 
