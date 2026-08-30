@@ -13,7 +13,7 @@ applied automatically; aborting at any point writes nothing.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
-      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
+      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build --target cne_prepare cne_setup cne_server -j
 ```
 
@@ -189,7 +189,19 @@ Any OpenAI-compatible client works: point Open WebUI at the server as an
 "OpenAI API" connection, or configure opencode/n8n with base URL
 `http://127.0.0.1:8080/v1`.
 
-## 7. Troubleshooting
+## 7. Automated live tests
+
+With the LFM2 artifact on disk, run the HTTP end-to-end check:
+
+```sh
+ctest --test-dir build -R server_e2e_live --output-on-failure
+```
+
+Edit env knobs in `tests/e2e/server_e2e_live.json` (ctx, cache, sessions)
+instead of exporting a long list of `CNE_*` variables. Full matrix of live
+tests, custom configs, and slow-test filtering: **docs/TESTING.md**.
+
+## 8. Troubleshooting
 
 | Symptom | Meaning | Fix |
 |---|---|---|

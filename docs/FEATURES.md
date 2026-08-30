@@ -369,7 +369,7 @@ classification, budget clamp, and demand-serving path.
 |---|---|
 | `POST /v1/chat/completions` | OpenAI format; `"stream": true` for SSE; `temperature`/`top_p`/`seed` passthrough; greedy default = lossless |
 | `GET /v1/models` | single-model list |
-| `GET /health` | regime, dense policy, streaming, MTP depth, ctx, cache cap |
+| `GET /health` | regime, dense policy, streaming, MTP depth, ctx, cache cap, **sessions**, **queue** |
 
 Server-specific knobs:
 
@@ -419,3 +419,7 @@ Behavior notes:
   system prompts (several thousand tokens) are safe. Size `ctx` to your
   workload; context costs ~20 KiB/token on hybrid-attention artifacts,
   plus KV headroom for generation.
+
+**Live tests:** `server_e2e_live` forks this binary and checks
+`/v1/chat/completions` plus session KV reuse. Config and `ctest` commands:
+**docs/TESTING.md**.

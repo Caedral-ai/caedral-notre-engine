@@ -1,4 +1,4 @@
-// Session KV reuse integration test. Config: tests/e2e/session_kv.json
+// Session KV reuse integration test. Config: tests/e2e/session_kv_live.json
 #include "cne_runtime.h"
 #include "cne_session.h"
 #include "e2e_config.h"

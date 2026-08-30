@@ -61,11 +61,17 @@ Velocity microbenches live under `bench/`, not `tools/`.
 
 | Subdir | What it tests |
 |---|---|
+| `e2e/` | JSON configs + shared loader for live test env/runtime |
 | `gguf/` | GGUF reader / manifest |
 | `memory/` | Budget and regime logic |
 | `features/streaming/` | Slice cache and I/O |
 | `boot/` | Runtime boot sequence (synthetic + optional live model) |
+| `session/` | Session KV reuse (`session_lcp`, `session_kv_live`, `session_bigctx_live`) |
+| `server/` | HTTP E2E against forked `cne_server` (`server_e2e_live`) |
 | `perplexity/` | PL drift-gate unit tests (`drift_gate.py`) |
+
+Live tests are opt-in: they skip when the GGUF from the JSON config is
+missing. See **docs/TESTING.md**.
 
 ## bench/
 
@@ -77,6 +83,7 @@ Scripts under `bench/scripts/`; results under `bench/results/` (gitignored).
 |---|---|
 | `FEATURES.md` | Feature guide for operators |
 | `SETUP.md` | Build and model fetch |
+| `TESTING.md` | Live integration tests (JSON configs, `ctest`) |
 | `BENCHMARKS.md` | Reproducible measurement protocol |
 | `models/` | Per-model serving notes |
 | `STRUCTURE.md` | This file |

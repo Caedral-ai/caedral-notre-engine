@@ -1,4 +1,4 @@
-// Big-context session E2E. Config: tests/e2e/session_bigctx.json
+// Big-context session E2E. Config: tests/e2e/session_bigctx_live.json
 #include "cne_runtime.h"
 #include "cne_session.h"
 #include "e2e_config.h"

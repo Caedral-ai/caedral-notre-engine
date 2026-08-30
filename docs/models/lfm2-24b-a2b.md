@@ -252,4 +252,15 @@ Auto-policy note: the classifier picked `R1_NEAR_LIMIT dense=anon` and it
 boots and serves correctly. No MTP warning applies. Think control gate is
 qwen3-specific and correctly inert here.
 
+### Live integration tests
+
+Default GGUF for `tests/e2e/*.json`. After download:
+
+```sh
+ctest --test-dir build -R 'server_e2e_live|session_kv_live' --output-on-failure
+```
+
+`session_bigctx_live` (~8 min) exercises 7k-token prefill at ctx=8192.
+Details: [TESTING.md](../TESTING.md).
+
 See also [BENCHMARKS.md](../BENCHMARKS.md) § LFM2.

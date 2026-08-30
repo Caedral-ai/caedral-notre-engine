@@ -104,7 +104,7 @@ Users state intent; the engine resolves settings:
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
 | Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
-| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health`; optional multi-turn KV reuse via `conversation_id`; requests serialize (one decode at a time) |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; serial multi-user seq lanes; live HTTP E2E test |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -172,10 +172,11 @@ tools/                     shipped binaries + operator scripts
   cne_prepare, cne_bench, cne_identity_gate, dev probes (see tools/README.md)
 bench/                     velocity harness scripts + local results (bench/README.md)
 tests/                     unit and integration tests
+  e2e/                     JSON configs for live tests (env + runtime)
   gguf/ memory/ features/streaming/   core library
-  boot/                    runtime boot sequence
+  boot/ session/ server/   runtime + session + HTTP live checks
   perplexity/              PL drift-gate unit tests
-docs/                      FEATURES · SETUP · BENCHMARKS · STRUCTURE · per-model notes
+docs/                      FEATURES · SETUP · TESTING · BENCHMARKS · STRUCTURE · per-model notes
 third_party/llama.cpp      pinned kernel fork (branch cne/cpu-kernels; kernels in `ggml-cpu/cne/`)
 models/                    local GGUF artifacts (gitignored)
 internal-docs/             private kernel/ops research (separate git repo, gitignored)
@@ -187,8 +188,9 @@ Requirements: Linux, CMake ≥ 3.16, C++17 compiler, ~50 GB free disk for the
 reference model.
 
 ```sh
-# build
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
+# build (include tests + server for live E2E)
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build -j
 
 # fetch + align a model (both scripts verify sha256 and run cne_prepare)
@@ -261,6 +263,7 @@ track yet. Full rationale: **[docs/FEATURES.md](docs/FEATURES.md)** §5 and §11
 
 Full endpoint/knob reference in `docs/FEATURES.md` §11;
 step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
+Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING.md)**.
 
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
@@ -313,6 +316,9 @@ On `cne_server`, do not enable MTP when using `conversation_id` for
 multi-turn chat — the two modes are mutually exclusive (see **Chat sessions
 vs MTP** above and `docs/FEATURES.md` §5).
 
+**Live tests** — with the LFM2 artifact on disk, `ctest --test-dir build -R server_e2e_live`
+exercises the full HTTP + session path; see **[docs/TESTING.md](docs/TESTING.md)**.
+
 ## Roadmap
 
 1. Streaming pipeline, budget manager, regime classification, tooling — **done**
@@ -321,9 +327,9 @@ vs MTP** above and `docs/FEATURES.md` §5).
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
-5. `cne-server` with OpenAI-compatible SSE — **single-session serving done**;
-   disconnect detection + `cne-setup` first-run CLI done; hardening
-   (auth, quotas, multi-session) next
+5. `cne-server` with OpenAI-compatible SSE — **serving + serial multi-user
+   sessions done**; disconnect detection + `cne-setup` done; live HTTP E2E
+   test; auth/quotas next
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`) —
    config-file plumbing shipped via `cne-setup`
 7. Multi-user serving, autotune, packaging
