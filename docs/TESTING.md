@@ -18,9 +18,11 @@ Live tests read env and runtime settings from JSON instead of long `ctest`
 
 | ctest name | config file | what it checks |
 |---|---|---|
-| `server_e2e_live` | `server_e2e_live.json` | fork `cne_server` → `/health`, `/v1/models`, 2-turn chat + `[session] reused=` |
-| `session_kv_live` | `session_kv_live.json` | runtime session KV reuse, parity, alternating users |
-| `session_bigctx_live` | `session_bigctx_live.json` | ~7k-token chunked prefill at ctx=8192, turn-2 reuse (slow) |
+| `server_e2e_live` | `server_e2e_live.json` | LFM2: fork `cne_server` → chat + session KV reuse |
+| `server_e2e_qwen_live` | `server_e2e_qwen_live.json` | Qwen3.6: same HTTP path; `CNE_MTP=0`, thinking off |
+| `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating users |
+| `session_kv_qwen_live` | `session_kv_qwen_live.json` | Qwen3.6 runtime session KV (slow) |
+| `session_bigctx_live` | `session_bigctx_live.json` | LFM2 ~7k-token prefill at ctx=8192 (slow) |
 
 Example (`server_e2e_live.json`):
 
@@ -49,6 +51,7 @@ Example (`server_e2e_live.json`):
 | `env` | applied via `setenv` before boot (`CNE_*` keys) |
 | `runtime` | `cap_gib`, `n_ctx`, `n_threads`, `stream_on` for direct runtime tests |
 | `options` | test-specific: `port`, `boot_timeout_s`, `prompt_tokens`, `gen_tokens` |
+| `chat` | HTTP E2E: `conversation_id`, `max_tokens`, `think_off` (Qwen3) |
 
 **Precedence:** `CNE_TEST_MODEL` overrides `model`; `CNE_E2E_CONFIG` overrides
 the default config path.
@@ -84,12 +87,23 @@ Fetch the default LFM2 artifact:
 ./tools/scripts/download-lfm2-24b-a2b.sh
 ```
 
+Qwen3.6 reference model (~21 GiB):
+
+```sh
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh
+ctest --test-dir build -R server_e2e_qwen_live --output-on-failure
+```
+
+**Qwen + sessions:** MTP and `conversation_id` are mutually exclusive — Qwen
+E2E configs set `CNE_MTP=0`. Use separate MTP benchmarks for speculative
+decode (`docs/FEATURES.md` §5).
+
 ## Labels and timeouts
 
-| Label | tests | typical LFM2 time |
+| Label | tests | typical time |
 |---|---|---|
 | *(none)* | `session_lcp`, `kv_budget`, `memory_budget`, … | < 1 s |
-| `slow` | `server_e2e_live`, `session_bigctx_live` | ~20 s – ~9 min |
+| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – ~15 min |
 
 `session_kv_live` loads the full model but finishes in ~20–40 s.
 

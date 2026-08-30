@@ -64,3 +64,15 @@ No quality trade-off needed — MTP gives speed without changing any weight or c
   geometry comes from each loaded artifact's manifest.
 - Quality gates for this profile run against the LOCKED lossless numbers
   and the saved drift tokens (models/eval/lossless_ref_64.toks).
+
+## 6. Live integration tests
+
+Config: `tests/e2e/server_e2e_qwen_live.json` (HTTP) and
+`session_kv_qwen_live.json` (runtime). Sessions require `CNE_MTP=0`; thinking
+is disabled via `CNE_THINK=0` and per-request `enable_thinking: false`.
+
+```sh
+ctest --test-dir build -R server_e2e_qwen_live --output-on-failure
+```
+
+See [TESTING.md](../TESTING.md).

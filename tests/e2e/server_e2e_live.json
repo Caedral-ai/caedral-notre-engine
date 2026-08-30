@@ -12,5 +12,10 @@
   "options": {
     "port": 0,
     "boot_timeout_s": 180
+  },
+  "chat": {
+    "conversation_id": "e2e-lfm2-session",
+    "max_tokens": 12,
+    "think_off": false
   }
 }

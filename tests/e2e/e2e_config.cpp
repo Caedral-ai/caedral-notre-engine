@@ -84,6 +84,16 @@ bool load(const std::string& path, const std::string& project_source_dir,
             out.gen_tokens = o["gen_tokens"].get<int>();
     }
 
+    if (j.contains("chat") && j["chat"].is_object()) {
+        const json& c = j["chat"];
+        if (c.contains("conversation_id"))
+            out.chat.conversation_id = c["conversation_id"].get<std::string>();
+        if (c.contains("max_tokens"))
+            out.chat.max_tokens = c["max_tokens"].get<int>();
+        if (c.contains("think_off"))
+            out.chat.think_off = c["think_off"].get<bool>();
+    }
+
     out.model = resolve_path(out.model, project_source_dir);
     return true;
 }

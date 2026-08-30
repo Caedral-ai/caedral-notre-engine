@@ -13,10 +13,17 @@ struct RuntimeOpts {
     bool   stream_on = false;
 };
 
+struct ChatOpts {
+    std::string conversation_id = "e2e-session";
+    int         max_tokens      = 12;
+    bool        think_off       = false;
+};
+
 struct Config {
     std::string model;
     std::unordered_map<std::string, std::string> env;
     RuntimeOpts runtime;
+    ChatOpts    chat;
     int port           = 0; // 0 = pick ephemeral
     int boot_timeout_s = 180;
     int prompt_tokens  = 0; // session_bigctx only; 0 = use default in test

@@ -99,13 +99,15 @@ bool wait_health(httplib::Client& cli, int timeout_s) {
 }
 
 json chat_body(const std::string& model, const json& messages,
-               const std::string& conv_id, int max_tokens) {
+               const std::string& conv_id, int max_tokens, bool think_off) {
     json body = {{"model", model},
                  {"messages", messages},
                  {"max_tokens", max_tokens},
                  {"temperature", 0},
                  {"stream", false}};
     if (!conv_id.empty()) body["conversation_id"] = conv_id;
+    if (think_off)
+        body["chat_template_kwargs"] = {{"enable_thinking", false}};
     return body;
 }
 
@@ -137,6 +139,8 @@ bool post_chat(httplib::Client& cli, const json& body, std::string& content,
 int run_live(const cne::e2e::Config& cfg, const std::string& model_path) {
     const int port =
         cfg.port > 0 ? cfg.port : 18000 + (int) (getpid() % 2000);
+    const int max_tok = cfg.chat.max_tokens > 0 ? cfg.chat.max_tokens : 12;
+    const std::string conv = cfg.chat.conversation_id;
 
     ServerProcess srv;
     if (!srv.start(model_path, port)) {
@@ -174,13 +178,12 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path) {
     const std::string model_id =
         json::parse(models->body)["data"][0]["id"].get<std::string>();
 
-    const std::string conv = "e2e-lfm2-session";
     std::string content1, err;
     const json turn1 = chat_body(
         model_id,
         json::array({ {{"role", "user"},
                        {"content", "The capital of France is"}} }),
-        conv, 12);
+        conv, max_tok, cfg.chat.think_off);
     if (!post_chat(cli, turn1, content1, err)) {
         fprintf(stderr, "FAIL: turn-1 chat (%s)\n", err.c_str());
         return 1;
@@ -194,7 +197,7 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path) {
                       {{"role", "assistant"}, {"content", content1}},
                       {{"role", "user"},
                        {"content", "Name one river in that city."}} }),
-        conv, 12);
+        conv, max_tok, cfg.chat.think_off);
     if (!post_chat(cli, turn2, content2, err)) {
         fprintf(stderr, "FAIL: turn-2 chat (%s)\n", err.c_str());
         return 1;
