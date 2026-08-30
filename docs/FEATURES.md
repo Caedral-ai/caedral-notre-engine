@@ -382,12 +382,15 @@ Server-specific knobs:
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
 | `CNE_SESSION=0` | disable conversation KV reuse (default on when `conversation_id` is sent) |
 | `CNE_SESSION_MAX=N` | LRU cap on tracked conversations (default 8) |
+| `CNE_KV_BPT=N` | KV bytes/token estimate for boot warnings (default ~20480) |
 
 Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
-tail; logs `[session] reused=N prefilled=M`. Omit `conversation_id` for
-stateless behavior (full prefill every request). `clear_conversation: true`
-drops cached KV for that id.
+tail; logs `[session] reused=N prefilled=M`. Different users can share one
+server (requests still serialize); each `conversation_id` keeps its own KV
+lane until LRU eviction. Omit `conversation_id` for stateless behavior (seq
+0 only, cleared after each request). `clear_conversation: true` drops cached
+KV for that id.
 
 **Requires `CNE_MTP=0` (or unset).** Sessions and draft-MTP cannot be
 combined on the server — see §5 for why. Use sequential decode for
@@ -402,7 +405,9 @@ boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
 
 Behavior notes:
 
-- Requests serialize (single-decode runtime); a client disconnecting
+- Requests serialize (single-decode runtime); `/health` reports
+  `queue.waiting` and `queue.active`. Waits over 50ms log `[queue]`.
+- A client disconnecting
   mid-stream stops generation cleanly - the socket is polled for liveness
   instead of trusting write() alone, so abandoned requests cannot hog the
   engine slot.

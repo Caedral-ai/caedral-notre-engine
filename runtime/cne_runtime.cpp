@@ -3,6 +3,7 @@
 #include "cne_stream_spec.h"
 
 #include "cne/memory_budget.h"
+#include "cne/kv_budget.h"
 #include "cne/model_registry.h"
 #include "cne/config.h"
 
@@ -179,6 +180,41 @@ bool runtime_load_llama(Runtime& rt, const RuntimeSettings& s) {
         spec_mtp_size_outputs(cparams, rt.mtp_k, (int)cparams.n_batch);
         fprintf(stderr, "[mtp] draft-mtp enabled: n_max=%d n_outputs_max=%u\n",
                 rt.mtp_k, cparams.n_outputs_max);
+    }
+
+    uint32_t n_seq_max = 1;
+    if (const char* sm = env("SESSION_MAX")) {
+        const int n = atoi(sm);
+        if (n > 1) n_seq_max = (uint32_t) n;
+    }
+    cparams.n_seq_max = n_seq_max;
+    if (n_seq_max > 1) cparams.kv_unified = false;
+
+    {
+        ServingKvEstimate kv;
+        kv.n_ctx         = (int) cparams.n_ctx;
+        kv.n_seq_max     = (int) n_seq_max;
+        kv.n_ctx_per_seq = n_seq_max > 0 ? (int) (cparams.n_ctx / n_seq_max)
+                                         : (int) cparams.n_ctx;
+        if (const char* kbpt = env("KV_BPT")) {
+            const int v = atoi(kbpt);
+            if (v > 0) kv.bytes_per_token = (size_t) v;
+        }
+        const Regime rg =
+            classify((size_t) rt.manifest.file_size,
+                     MemoryBudget::detect().mem_available);
+        const size_t model_resident =
+            rg == Regime::R0_RESIDENT ? (size_t) rt.manifest.file_size : 0;
+        fprintf(stderr,
+                "[cne] KV plan: ctx=%d (%d tok/seq x %u lanes) ~%.0f MiB est "
+                "(CNE_KV_BPT=%zu)\n",
+                kv.n_ctx, kv.n_ctx_per_seq, n_seq_max,
+                kv.kv_bytes() / (1024.0 * 1024.0), kv.bytes_per_token);
+        if (serving_kv_exceeds_headroom(kv, MemoryBudget::detect(),
+                                        model_resident))
+            fprintf(stderr,
+                    "[cne] WARNING: projected KV may exceed anonymous "
+                    "headroom — lower CNE_CTX or CNE_SESSION_MAX\n");
     }
 
     rt.ctx = llama_init_from_model(rt.model, cparams);

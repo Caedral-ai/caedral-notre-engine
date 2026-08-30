@@ -3,6 +3,7 @@
 // every setting before anything is written. Detection informs, user decides;
 // aborting never leaves a config file behind.
 #include "cne/memory_budget.h"
+#include "cne/kv_budget.h"
 
 #include <nlohmann/json.hpp>
 
@@ -43,7 +44,8 @@ bool valid_value(const std::string& key, const std::string& v,
         err = "on | off";
     else if (key == "dense")
         err = "mmap | warm | anon";
-    else if (key == "mtp" || key == "threads" || key == "ctx")
+    else if (key == "mtp" || key == "threads" || key == "ctx" ||
+             key == "session_max")
         err = "a whole number" +
               std::string(key == "threads" ? " >= 1" : "");
     else if (key == "port")
@@ -78,6 +80,7 @@ bool valid_value(const std::string& key, const std::string& v,
     if (!all_digits(v)) return false;
     long n = atol(v.c_str());
     if (key == "threads" || key == "ctx") return n >= 1;
+    if (key == "session_max") return n >= 1 && n <= 64;
     return true;   // mtp >= 0, cache_gib >= 0 (= clamp)
 }
 
@@ -122,6 +125,13 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
     // them in the artifact directory name
     bool has_mtp =
         artifact.string().find("mtp") != std::string::npos;
+    const bool mtp_on = has_mtp && !deep;
+    cne::ServingKvEstimate kv =
+        cne::suggest_serving_kv(budget, model_bytes, regime, mtp_on);
+    char kv_note[160];
+    snprintf(kv_note, sizeof(kv_note),
+             "~%.0f MiB KV est at ctx=%d x %d sessions",
+             kv.kv_bytes() / (1024.0 * 1024.0), kv.n_ctx, kv.n_seq_max);
 
     printf("\nartifact : %s (%s)\n", artifact.filename().c_str(),
            gib(model_bytes).c_str());
@@ -151,19 +161,24 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
             ? "MTP-era A/B: mmap beat anon under speculation (SERVER.md §6)"
             : "empty = engine auto-classifies per regime");
 
-    add("mtp", "MTP draft depth", (has_mtp && !deep) ? "8" : "0",
+    add("mtp", "MTP draft depth", mtp_on ? "8" : "0",
         has_mtp
             ? (deep
                    ? "net-negative below ~0.90 expert-cache hit-rate; off in "
                      "deep streaming regimes"
-                   : "depth 8 + p_min 0.5 measured ~+20-120% lossless")
-            : "no MTP tensors detected (filename heuristic)");
+                   : "depth 8 + p_min 0.5 measured ~+20-120% lossless; "
+                     "incompatible with conversation_id sessions")
+            : "no MTP tensors detected (filename heuristic); leave 0 for chat "
+              "sessions");
 
     add("threads", "threads", std::to_string(std::max(1, hw_threads / 2)),
         "physical-core count beats SMT for both decode arms on this class");
 
-    add("ctx", "context size", "1024",
-        "serving floor: MTP aborts near token ~250 below this");
+    add("ctx", "context size", std::to_string(kv.n_ctx), kv_note);
+
+    add("session_max", "conversation lanes", std::to_string(kv.n_seq_max),
+        mtp_on ? "1 when MTP on (sessions need CNE_MTP=0)"
+               : "serial multi-user KV parking; see KV estimate above");
 
     add("cache_gib", "expert cache cap", "",
         "empty = budget manager clamps to MemAvailable (recommended)");
@@ -342,7 +357,8 @@ int main(int argc, char** argv) {
         if (it.key == "stream" || it.key == "think" || it.key == "kernels")
             cfg[it.key] = (it.value == "on" || it.value == "1" ||
                            it.value == "true");
-        else if (it.key == "threads" || it.key == "ctx" || it.key == "port")
+        else if (it.key == "threads" || it.key == "ctx" || it.key == "port" ||
+                 it.key == "session_max")
             cfg[it.key] = atoi(it.value.c_str());
         else if (it.key == "max_req_s")
             cfg[it.key] = atof(it.value.c_str());
@@ -380,6 +396,7 @@ int main(int argc, char** argv) {
         else if (it.key == "mtp")       kv("CNE_MTP", it.value);
         else if (it.key == "threads")   kv("CNE_THREADS", it.value);
         else if (it.key == "ctx")       kv("CNE_CTX", it.value);
+        else if (it.key == "session_max") kv("CNE_SESSION_MAX", it.value);
         else if (it.key == "cache_gib") kv("CNE_CACHE_GIB", it.value);
         else if (it.key == "think")     kv("CNE_THINK", env_on(it.value));
         else if (it.key == "max_req_s") kv("CNE_MAX_REQ_S", it.value);

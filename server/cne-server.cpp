@@ -121,6 +121,8 @@ struct Engine {
     std::string        chat_template;   // empty = model default template
     double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
     std::mutex         gen_mutex;       // single-decode: serialize generation
+    std::atomic<int>   queue_waiting{0}; // requests blocked on gen_mutex
+    std::atomic<bool>  decode_active{false};
     bool               sessions_enabled = true;  // CNE_SESSION=0 disables
     cne::SessionStore  sessions{8};
     std::string        active_conv_id;  // KV owner in the single ctx
@@ -346,6 +348,7 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
             return -1;
         }
     } else {
+        cne::session_clear_seq(eng.ctx, 0);
         const int n_batch = llama_n_batch(eng.ctx);
         for (int off = 0; off < (int)prompt.size(); off += n_batch) {
             const int len =
@@ -367,7 +370,10 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
         emit_token(emit, id);
         if (slot) cne::session_append_token(*slot, id);
         cne::stream_set_step(i);
-        if (llama_decode(eng.ctx, llama_batch_get_one(&id, 1))) {
+        const bool ok = slot
+            ? cne::session_decode_token(eng.ctx, *slot, id)
+            : llama_decode(eng.ctx, llama_batch_get_one(&id, 1)) == 0;
+        if (!ok) {
             fprintf(stderr, "[server] DECODE FAILED at step %d\n", i);
             finish_reason = "error";
             return i;
@@ -386,25 +392,19 @@ cne::SessionSlot* bind_conversation(Engine& eng, const std::string& conv_id,
     const bool want =
         eng.sessions_enabled && !conv_id.empty() && eng.mtp_k == 0;
     if (!want) {
-        if (!eng.active_conv_id.empty()) {
-            llama_memory_clear(llama_get_memory(eng.ctx), true);
-            eng.active_conv_id.clear();
-        }
+        eng.active_conv_id.clear();
         if (!conv_id.empty() && eng.mtp_k > 0)
             fprintf(stderr,
                     "[session] conversation_id ignored (MTP active)\n");
         return nullptr;
     }
     if (clear_conv) {
-        eng.sessions.remove(conv_id);
-        llama_memory_clear(llama_get_memory(eng.ctx), true);
+        eng.sessions.remove(conv_id, eng.ctx);
         eng.active_conv_id = conv_id;
-        return &eng.sessions.get_or_create(conv_id);
+        return &eng.sessions.get_or_create(conv_id, eng.ctx);
     }
-    if (eng.active_conv_id != conv_id)
-        llama_memory_clear(llama_get_memory(eng.ctx), true);
     eng.active_conv_id = conv_id;
-    return &eng.sessions.get_or_create(conv_id);
+    return &eng.sessions.get_or_create(conv_id, eng.ctx);
 }
 
 // Draft-MTP speculative arm (greedy only - lossless contract).
@@ -612,7 +612,24 @@ void handle_chat(httplib::Response& res, const json& body,
     const int n_gen = std::min(max_tokens, headroom);
 
     // Single-decode runtime: serialize generation across connections.
+    g_engine.queue_waiting.fetch_add(1, std::memory_order_relaxed);
+    const auto queue_t0 = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> gen_lock(eng.gen_mutex);
+    g_engine.queue_waiting.fetch_sub(1, std::memory_order_relaxed);
+    const double queue_wait_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - queue_t0).count();
+    if (queue_wait_s >= 0.05)
+        fprintf(stderr,
+                "[queue] waited %.0fms (%d still queued)\n",
+                queue_wait_s * 1000.0,
+                eng.queue_waiting.load(std::memory_order_relaxed));
+    eng.decode_active.store(true, std::memory_order_relaxed);
+    struct DecodeActiveGuard {
+        Engine& e;
+        ~DecodeActiveGuard() {
+            e.decode_active.store(false, std::memory_order_relaxed);
+        }
+    } decode_guard{eng};
 
     cne::SessionSlot* slot = bind_conversation(eng, conv_id, clear_conv);
     cne::SessionPrefillStats prefill_stats;
@@ -689,7 +706,7 @@ void handle_chat(httplib::Response& res, const json& body,
                 " tokens thinking; increase max_tokens or disable thinking]"));
         }
         if (!st->slot)
-            llama_memory_clear(llama_get_memory(eng.ctx), true);
+            cne::session_clear_seq(eng.ctx, 0);
         else if (st->prefill_stats.reused_tokens ||
                  st->prefill_stats.prefilled_tokens)
             fprintf(stderr,
@@ -798,7 +815,7 @@ void handle_chat(httplib::Response& res, const json& body,
     gen_cv.wait(l, [&] { return gen_done; });
     llama_sampler_free(smpl);
     if (!slot)
-        llama_memory_clear(llama_get_memory(eng.ctx), true);
+        cne::session_clear_seq(eng.ctx, 0);
 
     if (finish_reason == "error" || n < 0) {
         res.status = 500;
@@ -927,11 +944,6 @@ int main(int argc, char** argv) {
         const size_t n = (size_t) atoi(sm);
         if (n > 0) g_engine.sessions = cne::SessionStore(n);
     }
-    if (g_engine.sessions_enabled)
-        fprintf(stderr,
-                "[server] conversation KV reuse on (max %zu slots; pass "
-                "conversation_id per request)\n",
-                g_engine.sessions.max_slots());
     if (const char* v = cne::env("MAX_REQ_S")) g_engine.max_req_s = atof(v);
     if (g_engine.max_req_s > 0)
         fprintf(stderr, "[server] wall cap: %.0fs per request (CNE_MAX_REQ_S)\n",
@@ -965,6 +977,13 @@ int main(int argc, char** argv) {
     g_engine.vocab            = rt->vocab;
     g_engine.n_ctx            = rt->n_ctx;
 
+    g_engine.sessions.set_seq_capacity(llama_n_seq_max(g_engine.ctx));
+    if (g_engine.sessions_enabled)
+        fprintf(stderr,
+                "[server] conversation KV reuse on (max %zu slots, %u seq "
+                "lanes; pass conversation_id per request)\n",
+                g_engine.sessions.max_slots(), llama_n_seq_max(g_engine.ctx));
+
     const int n_threads =
         cne::env("THREADS") ? atoi(cne::env("THREADS")) : 8;
 
@@ -997,6 +1016,10 @@ int main(int argc, char** argv) {
                                : json(g_engine.active_conv_id)},
                 {"slots", g_engine.sessions.size()},
                 {"max_slots", g_engine.sessions.max_slots()},
+            }},
+            {"queue", json{
+                {"waiting", g_engine.queue_waiting.load()},
+                {"active", g_engine.decode_active.load()},
             }},
             {"cache_cap_mib", g_engine.cache_cap >> 20},
             {"n_ctx", g_engine.n_ctx}});
