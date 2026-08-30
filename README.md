@@ -264,7 +264,8 @@ track yet. Full rationale: **[docs/FEATURES.md](docs/FEATURES.md)** §5 and §11
 Full endpoint/knob reference in `docs/FEATURES.md` §11;
 step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 **Multi-user API** (auth, `session_max`, proxy layer, roadmap):
-**[docs/SERVING.md](docs/SERVING.md)**.
+**[docs/SERVING.md](docs/SERVING.md)**. **JWT gateway (Path B):**
+**[docs/GATEWAY.md](docs/GATEWAY.md)**.
 Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING.md)**.
 
 <details>

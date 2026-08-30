@@ -9,6 +9,7 @@ deciding whether something is product logic vs upstream kernel work.
 core/                 Engine library (cne_core) — GGUF, memory, streaming features
 runtime/              llama.cpp seam + demand-serving runtime (cne_runtime)
 server/               OpenAI-compatible HTTP/SSE server (cne_server)
+gateway/              JWT API gateway in front of cne_server (Path B)
 cli/                  First-run setup (cne_setup)
 tools/                CMake-built binaries + operator scripts
 bench/                Velocity harnesses (scripts + local results)
@@ -84,6 +85,7 @@ Scripts under `bench/scripts/`; results under `bench/results/` (gitignored).
 | `FEATURES.md` | Feature guide for operators |
 | `SETUP.md` | Build, `cne_setup`, and `server.json` |
 | `SERVING.md` | Multi-user API: architecture, limits, roadmap |
+| `GATEWAY.md` | JWT gateway (Path B) setup and client flow |
 | `TESTING.md` | Live integration tests (JSON configs, `ctest`) |
 | `BENCHMARKS.md` | Reproducible measurement protocol |
 | `models/` | Per-model serving notes |

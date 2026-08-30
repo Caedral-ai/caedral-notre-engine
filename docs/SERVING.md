@@ -103,37 +103,39 @@ Do **not** expose `cne_server` directly on the internet. Put an API layer in
 front.
 
 ```
-Clients (Open WebUI, mobile, agents)
-        │
-        ▼
+Clients (JWT)  →  gateway :8090  →  cne_server :8080 (API mode, 127.0.0.1)
+```
+
+**Path B (recommended):** use the JWT gateway — **docs/GATEWAY.md**. End users
+authenticate to the gateway; the gateway forwards to CNE with the internal API
+key and `X-User-Id` from the JWT `sub`.
+
+```
 ┌───────────────────────────────────────┐
-│  Your API (auth, quotas, routing)      │  ← you build / operate
-│  - API keys or JWT                     │
-│  - Rate limits                         │
-│  - Per-user session caps               │
-│  - conversation_id = user:chat         │
-│  - Optional: trim/summarize messages   │
+│  cne_gateway (JWT, :8090)              │  ← Path B — docs/GATEWAY.md
+│  - POST /v1/auth/token                 │
+│  - validates JWT on /v1/chat/*          │
 └───────────────────────────────────────┘
-        │
+        │ internal API key + X-User-Id
         ▼
 ┌───────────────────────────────────────┐
-│  cne_server (127.0.0.1)                │  ← this repo
+│  cne_server (API mode, 127.0.0.1)      │  ← this repo
 │  - OpenAI /v1/chat/completions         │
 │  - KV reuse, queue, /health            │
 └───────────────────────────────────────┘
 ```
 
-### API layer responsibilities (ship these first)
+### API layer responsibilities (Path B gateway + CNE)
 
-| Item | Why |
+| Item | Where |
 |---|---|
-| **Authentication** | API keys, JWT, or mTLS |
-| **Stable id namespace** | Set `conversation_id` to `{user_id}:{chat_id}` server-side; ignore client-supplied raw ids or validate ownership |
-| **Per-user session limit** | e.g. max 2 active chats per user; reject or force-close before calling `cne_server` |
-| **Rate limits** | Requests/min and new-chats/min per user (nginx, Cloudflare, app middleware) |
-| **Context window policy** | Before proxying, trim `messages` to fit `ctx / session_max` minus `max_tokens` headroom |
-| **TLS + bind** | `cne_server` on `127.0.0.1`; TLS at proxy |
-| **Observability** | Poll `/health` (`queue.waiting`, `sessions.slots`); log `[queue]` waits > 50 ms |
+| **Authentication** | `cne_gateway` — JWT (`POST /v1/auth/token`) |
+| **Stable id namespace** | Gateway → CNE `chat_id` as `{user}:{chat}` |
+| **Per-user session limit** | `cne_server` — `session_max_per_user` |
+| **Rate limits** | Gateway `CNE_GATEWAY_RPM` + nginx |
+| **Context trim** | `cne_server` — per-lane auto-trim |
+| **TLS + bind** | CNE on `127.0.0.1`; TLS in front of gateway |
+| **Observability** | `GET /health` on gateway and CNE |
 
 ### Open WebUI and similar clients
 
@@ -147,9 +149,9 @@ integration.
 | Thin proxy adds `conversation_id` | **Yes** | Proxy trims + maps WebUI chat id |
 | Your own client | **Yes** | Full control |
 
-For multi-user hosting, prefer a **small proxy** that: authenticates the user,
-maps `(user, chat) → conversation_id`, enforces per-user session caps, and
-forwards to `http://127.0.0.1:8080/v1/...`.
+For multi-user hosting, point clients at **`cne_gateway`** (`docs/GATEWAY.md`).
+It issues JWTs, maps `X-Chat-Id` → CNE sessions, and never exposes the internal
+API key.
 
 ---
 

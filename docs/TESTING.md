@@ -105,7 +105,7 @@ decode (`docs/FEATURES.md` §5).
 
 | Label | tests | typical time |
 |---|---|---|
-| *(none)* | `session_lcp`, `kv_budget`, `memory_budget`, … | < 1 s |
+| *(none)* | `session_lcp`, `session_tenant`, `api_unit`, `gateway_unit`, `kv_budget`, … | < 1 s |
 | `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – ~15 min |
 
 `session_kv_live` loads the full model but finishes in ~20–40 s.
