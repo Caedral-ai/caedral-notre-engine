@@ -88,10 +88,35 @@ bool load(const std::string& path, const std::string& project_source_dir,
         const json& c = j["chat"];
         if (c.contains("conversation_id"))
             out.chat.conversation_id = c["conversation_id"].get<std::string>();
+        if (c.contains("chat_id"))
+            out.chat.chat_id = c["chat_id"].get<std::string>();
         if (c.contains("max_tokens"))
             out.chat.max_tokens = c["max_tokens"].get<int>();
         if (c.contains("think_off"))
             out.chat.think_off = c["think_off"].get<bool>();
+    }
+
+    if (j.contains("gateway") && j["gateway"].is_object()) {
+        const json& g = j["gateway"];
+        if (g.contains("env") && g["env"].is_object()) {
+            for (auto it = g["env"].begin(); it != g["env"].end(); ++it) {
+                if (it.value().is_string())
+                    out.gateway.env[it.key()] = it.value().get<std::string>();
+                else if (it.value().is_number_integer())
+                    out.gateway.env[it.key()] =
+                        std::to_string(it.value().get<int>());
+            }
+        }
+        if (g.contains("users_file") && g["users_file"].is_string())
+            out.gateway.users_file =
+                resolve_path(g["users_file"].get<std::string>(),
+                             project_source_dir);
+        if (g.contains("username") && g["username"].is_string())
+            out.gateway.username = g["username"].get<std::string>();
+        if (g.contains("password") && g["password"].is_string())
+            out.gateway.password = g["password"].get<std::string>();
+        if (g.contains("port") && g["port"].is_number_integer())
+            out.gateway.port = g["port"].get<int>();
     }
 
     out.model = resolve_path(out.model, project_source_dir);

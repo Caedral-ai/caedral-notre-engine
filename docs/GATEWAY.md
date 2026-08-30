@@ -120,6 +120,13 @@ Or from build tree (if CMake finds Python):
 ctest --test-dir build -R gateway_unit --output-on-failure
 ```
 
+**Live E2E (gateway + engine):** requires GGUF, `gateway/.venv` with
+`pip install -r requirements.txt`, then:
+
+```sh
+ctest --test-dir build -R server_gateway_live --output-on-failure
+```
+
 ## 6. Production notes
 
 - Replace `users.example.txt` with your user store or swap `/v1/auth/token` for

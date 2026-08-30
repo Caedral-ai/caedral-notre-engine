@@ -15,8 +15,17 @@ struct RuntimeOpts {
 
 struct ChatOpts {
     std::string conversation_id = "e2e-session";
+    std::string chat_id           = "e2e-chat";
     int         max_tokens      = 12;
     bool        think_off       = false;
+};
+
+struct GatewayOpts {
+    std::unordered_map<std::string, std::string> env;
+    std::string users_file;
+    std::string username = "alice";
+    std::string password = "changeme";
+    int         port     = 0; // 0 = server port + 1
 };
 
 struct Config {
@@ -24,6 +33,7 @@ struct Config {
     std::unordered_map<std::string, std::string> env;
     RuntimeOpts runtime;
     ChatOpts    chat;
+    GatewayOpts gateway;
     int port           = 0; // 0 = pick ephemeral
     int boot_timeout_s = 180;
     int prompt_tokens  = 0; // session_bigctx only; 0 = use default in test
