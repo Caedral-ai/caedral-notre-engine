@@ -339,7 +339,7 @@ Whichever features you enable or disable:
 
 ## 11. OpenAI-compatible server (`cne_server`)
 
-**Status:** working (single session) · **Built with:** `-DCNE_BUILD_SERVER=ON`
+**Status:** working (single context; optional multi-turn KV reuse) · **Built with:** `-DCNE_BUILD_SERVER=ON`
 
 Serving endpoint on the same runtime the bench measures - identical regime
 classification, budget clamp, and demand-serving path.
@@ -359,12 +359,20 @@ Server-specific knobs:
 | `CNE_KERNELS=0` | stock llama.cpp ggml-cpu path (A/B); default on when unset |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
+| `CNE_SESSION=0` | disable conversation KV reuse (default on when `conversation_id` is sent) |
+| `CNE_SESSION_MAX=N` | LRU cap on tracked conversations (default 8) |
+
+Multi-turn KV reuse (T2): send the same `conversation_id` on each turn (JSON
+field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
+tail; logs `[session] reused=N prefilled=M`. Omit `conversation_id` for
+stateless behavior (full prefill every request). `clear_conversation: true`
+drops cached KV for that id. Incompatible with MTP (`CNE_MTP>0`).
 
 The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >
 built-in default, and every resolved knob is logged with its source at
 boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
-`ctx`, `think`, `cache_gib`, `max_req_s`. See **docs/SETUP.md**.
+`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`. See **docs/SETUP.md**.
 
 Behavior notes:
 
