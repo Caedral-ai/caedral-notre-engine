@@ -18,9 +18,9 @@ Live tests read env and runtime settings from JSON instead of long `ctest`
 
 | ctest name | config file | what it checks |
 |---|---|---|
-| `server_e2e_live` | `server_e2e_live.json` | LFM2: fork `cne_server` → chat + session KV reuse |
+| `server_api_live` | `server_api_live.json` | API mode: auth, `chat_id`, per-user sessions |
 | `server_e2e_qwen_live` | `server_e2e_qwen_live.json` | Qwen3.6: same HTTP path; `CNE_MTP=0`, thinking off |
-| `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating users |
+| `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating `conversation_id`s (no auth) |
 | `session_kv_qwen_live` | `session_kv_qwen_live.json` | Qwen3.6 runtime session KV (slow) |
 | `session_bigctx_live` | `session_bigctx_live.json` | LFM2 ~7k-token prefill at ctx=8192 (slow) |
 
@@ -93,6 +93,9 @@ Qwen3.6 reference model (~21 GiB):
 ./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh
 ctest --test-dir build -R server_e2e_qwen_live --output-on-failure
 ```
+
+Multi-user API limits (global LRU, no per-tenant isolation) and the serving
+roadmap: **docs/SERVING.md**.
 
 **Qwen + sessions:** MTP and `conversation_id` are mutually exclusive — Qwen
 E2E configs set `CNE_MTP=0`. Use separate MTP benchmarks for speculative

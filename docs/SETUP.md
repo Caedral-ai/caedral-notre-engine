@@ -96,6 +96,7 @@ Accepted value grammars:
 | MTP draft depth | whole number >= 0 (0 = off) |
 | threads | whole number >= 1 |
 | context size | whole number >= 1 |
+| conversation lanes (`session_max`) | whole number 1–64; KV lanes + LRU cap on `conversation_id` |
 | expert cache cap | GiB number; empty or 0 = budget manager clamps |
 | thinking default | `on` \| `off` |
 | wall cap per request | seconds, 0 = off |
@@ -123,6 +124,10 @@ Suggestions come from measurements on the reference machine/hardware class
 - **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, kernels on,
   4 threads, ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
   `docs/models/lfm2-24b-a2b.md`
+- **conversation lanes** (`session_max`) - when MTP is off, typically 2 (3 on
+  comfortable RAM); 1 when MTP is on or memory is tight. Sets `CNE_SESSION_MAX`
+  and splits total `ctx` evenly across lanes (`ctx / session_max` tokens per
+  chat). Requires `mtp: 0` for multi-turn API use.
 
 You can override any of them; nothing changes model math silently.
 
@@ -132,20 +137,25 @@ Written where you pointed `--config` (default `models/server.json`):
 
 ```json
 {
-  "ctx": 1024,
+  "ctx": 4096,
   "dense": "mmap",
   "host": "127.0.0.1",
   "kernels": true,
   "max_req_s": 0.0,
   "model": "qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf",
-  "mtp": 8,
-  "mtp_p_min": 0.5,
+  "mtp": 0,
   "port": 8080,
+  "session_max": 2,
   "stream": false,
   "think": true,
   "threads": 4
 }
 ```
+
+Example above is tuned for **multi-turn / multi-user chat** (`mtp: 0`,
+`session_max: 2` → 2048 tokens per parked conversation). For stateless MTP
+speed, use `"mtp": 8`, `"mtp_p_min": 0.5`, omit `session_max` or set it to
+`1`, and do not send `conversation_id` — see **docs/FEATURES.md** §5.
 
 Notes:
 
@@ -188,6 +198,11 @@ curl http://localhost:8080/v1/chat/completions \
 Any OpenAI-compatible client works: point Open WebUI at the server as an
 "OpenAI API" connection, or configure opencode/n8n with base URL
 `http://127.0.0.1:8080/v1`.
+
+For **multiple users on a public API**, do not expose `cne_server` directly —
+use auth, rate limits, and server-assigned `conversation_id` in a proxy layer.
+Open WebUI usually does not send `conversation_id`, so KV reuse may not apply
+unless you add a thin adapter. Full multi-tenant guidance: **docs/SERVING.md**.
 
 ## 7. Automated live tests
 

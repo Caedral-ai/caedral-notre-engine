@@ -2,6 +2,7 @@
 # inside the fork beyond ggml-cpu compute hooks.
 add_library(cne_runtime STATIC
     cne_runtime.cpp
+    cne_api.cpp
     cne_session.cpp
     cne_stream_spec.cpp
     seam/cne_adapter.cpp

@@ -4,6 +4,7 @@
 #include "e2e_config.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -145,11 +146,12 @@ int run_live(const char* model_path, const cne::e2e::Config& cfg) {
     }
 
     llama_sampler* smpl = greedy_sampler();
-    cne::SessionSlot& slot = store.get_or_create("bigctx", ctx);
+    cne::SessionSlot* slot = store.get_or_create("bigctx", ctx);
+    assert(slot);
 
     t0 = std::chrono::steady_clock::now();
     cne::SessionPrefillStats st1;
-    if (!cne::session_prefill(ctx, slot, prompt1, &st1)) {
+    if (!cne::session_prefill(ctx, *slot, prompt1, &st1)) {
         fprintf(stderr, "FAIL: turn-1 long session_prefill\n");
         return 1;
     }
@@ -162,20 +164,20 @@ int run_live(const char* model_path, const cne::e2e::Config& cfg) {
                 st1.reused_tokens, st1.prefilled_tokens, prompt1.size());
         return 1;
     }
-    if (cne::kv_seq_len(ctx, slot.seq_id) != (int) prompt1.size()) {
+    if (cne::kv_seq_len(ctx, slot->seq_id) != (int) prompt1.size()) {
         fprintf(stderr, "FAIL: KV len %d != prompt %zu after turn-1\n",
-                cne::kv_seq_len(ctx, slot.seq_id), prompt1.size());
+                cne::kv_seq_len(ctx, slot->seq_id), prompt1.size());
         return 1;
     }
 
     const std::vector<llama_token> gen1 =
-        greedy_decode(slot, ctx, smpl, vocab, n_gen);
+        greedy_decode(*slot, ctx, smpl, vocab, n_gen);
     if (gen1.empty()) {
         fprintf(stderr, "FAIL: turn-1 produced no tokens\n");
         return 1;
     }
 
-    std::vector<llama_token> prompt2 = slot.kv_tokens;
+    std::vector<llama_token> prompt2 = slot->kv_tokens;
     const std::vector<llama_token> tail =
         tokenize(vocab, " Follow-up after long context.");
     prompt2.insert(prompt2.end(), tail.begin(), tail.end());
@@ -188,7 +190,7 @@ int run_live(const char* model_path, const cne::e2e::Config& cfg) {
     const size_t expect_reused = prompt1.size() + gen1.size();
     t0 = std::chrono::steady_clock::now();
     cne::SessionPrefillStats st2;
-    if (!cne::session_prefill(ctx, slot, prompt2, &st2)) {
+    if (!cne::session_prefill(ctx, *slot, prompt2, &st2)) {
         fprintf(stderr, "FAIL: turn-2 session_prefill\n");
         return 1;
     }
@@ -209,7 +211,7 @@ int run_live(const char* model_path, const cne::e2e::Config& cfg) {
 
     llama_sampler_reset(smpl);
     const std::vector<llama_token> gen2_session =
-        greedy_decode(slot, ctx, smpl, vocab, n_gen);
+        greedy_decode(*slot, ctx, smpl, vocab, n_gen);
 
     t0 = std::chrono::steady_clock::now();
     if (!full_prefill_seq0(ctx, prompt2)) {

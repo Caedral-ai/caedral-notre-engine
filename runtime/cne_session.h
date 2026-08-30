@@ -17,10 +17,13 @@ struct SessionPrefillStats {
 
 struct SessionSlot {
     std::string              id;
+    std::string              owner;       // tenant user id (API mode)
     std::vector<llama_token> kv_tokens;   // tokens represented in KV for seq_id
     llama_seq_id             seq_id = -1; // llama sequence lane; assigned by store
     int64_t                  last_tick = 0;
 };
+
+enum class SessionErr { None, OwnerMismatch };
 
 // Longest common prefix length (token-level, not string-level).
 size_t token_common_prefix(const std::vector<llama_token>& a,
@@ -51,21 +54,29 @@ public:
     explicit SessionStore(size_t max_slots = 8);
 
     void set_seq_capacity(uint32_t n_seq_max);
+    void set_max_slots_per_user(size_t n);
 
     // ctx is used to clear KV when evicting or removing a slot.
-    SessionSlot& get_or_create(const std::string& id, llama_context* ctx);
+    // owner: tenant id for API mode (empty = legacy single-tenant).
+    // Returns nullptr on OwnerMismatch (existing id owned by another user).
+    SessionSlot* get_or_create(const std::string& id, llama_context* ctx,
+                               const std::string& owner = {},
+                               SessionErr* err_out = nullptr);
     void         remove(const std::string& id, llama_context* ctx);
     void         clear(llama_context* ctx);
     size_t       size() const { return slots_.size(); }
     size_t       max_slots() const { return max_slots_; }
+    size_t       count_for_owner(const std::string& owner) const;
 
 private:
     void touch(SessionSlot& slot);
     void evict_lru(llama_context* ctx);
+    void evict_lru_for_owner(const std::string& owner, llama_context* ctx);
     llama_seq_id alloc_seq();
     void         free_seq(llama_seq_id seq);
 
     size_t max_slots_;
+    size_t max_slots_per_user_ = 0;
     uint32_t n_seq_cap_ = 1;
     std::vector<bool> seq_free_{1, true};
     int64_t tick_ = 0;

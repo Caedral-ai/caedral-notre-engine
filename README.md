@@ -134,7 +134,7 @@ velocity gains and reproduction commands: **[docs/BENCHMARKS.md](docs/BENCHMARKS
 Client (OpenAI SDK / Open WebUI / n8n)
         │  HTTP/SSE                      (live via cne-server)
         ▼
-    cne-server ── OpenAI-compatible API (auth/quotas: later)
+    cne-server ── OpenAI-compatible API (auth/quotas: API layer — docs/SERVING.md)
         ▼
     cne-runtime ── regime classifier → feature activation
         ▼                              ▼
@@ -263,6 +263,8 @@ track yet. Full rationale: **[docs/FEATURES.md](docs/FEATURES.md)** §5 and §11
 
 Full endpoint/knob reference in `docs/FEATURES.md` §11;
 step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
+**Multi-user API** (auth, `session_max`, proxy layer, roadmap):
+**[docs/SERVING.md](docs/SERVING.md)**.
 Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING.md)**.
 
 <details>
@@ -276,7 +278,7 @@ Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING
 | `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k); **incompatible with server `conversation_id` sessions** |
 | `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |
 | `CNE_SESSION` | `0` | disable conversation KV reuse on the server (default on when `conversation_id` is sent) |
-| `CNE_SESSION_MAX` | N | LRU cap on tracked conversations (default 8) |
+| `CNE_SESSION_MAX` | N | LRU cap on tracked conversations + KV lanes; splits `ctx` evenly (see **docs/SERVING.md**) |
 | `CNE_THREADS` | N | compute threads (default 8); physical-core count beats SMT on many laptops |
 | `CNE_FA` | set = on | flash attention; ~+3% at ctx 1024, scales with context |
 | `CNE_KV_Q8` | set = on | q8_0 KV cache; measured CPU regression on the reference machine, kept for re-measurement |
@@ -329,10 +331,10 @@ exercises the full HTTP + session path; see **[docs/TESTING.md](docs/TESTING.md)
 4. Mixed-precision miss serving (opt-in lossy profile)
 5. `cne-server` with OpenAI-compatible SSE — **serving + serial multi-user
    sessions done**; disconnect detection + `cne-setup` done; live HTTP E2E
-   test; auth/quotas next
+   test; multi-tenant API plan in **docs/SERVING.md** (proxy now, engine Phase 1+)
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`) —
    config-file plumbing shipped via `cne-setup`
-7. Multi-user serving, autotune, packaging
+7. Tenant-aware sessions, fairness, autotune, packaging — see **docs/SERVING.md** §5
 
 Non-goals: GPU offloading, training/fine-tuning, dense-model optimization
 (that's llama.cpp's job), Windows/macOS support initially.

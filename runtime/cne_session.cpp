@@ -165,6 +165,37 @@ void SessionStore::free_seq(llama_seq_id seq) {
     seq_free_[(size_t) seq] = true;
 }
 
+void SessionStore::set_max_slots_per_user(size_t n) { max_slots_per_user_ = n; }
+
+size_t SessionStore::count_for_owner(const std::string& owner) const {
+    if (owner.empty()) return 0;
+    size_t n = 0;
+    for (const auto& kv : slots_)
+        if (kv.second.owner == owner) n++;
+    return n;
+}
+
+void SessionStore::evict_lru_for_owner(const std::string& owner,
+                                       llama_context* ctx) {
+    if (slots_.empty()) return;
+    auto it = slots_.end();
+    for (auto jt = slots_.begin(); jt != slots_.end(); ++jt) {
+        if (jt->second.owner != owner) continue;
+        if (it == slots_.end() || jt->second.last_tick < it->second.last_tick)
+            it = jt;
+    }
+    if (it == slots_.end()) {
+        evict_lru(ctx);
+        return;
+    }
+    SessionSlot doomed = std::move(it->second);
+    slots_.erase(it);
+    session_reset_kv(ctx, doomed);
+    if (doomed.seq_id >= 0) free_seq(doomed.seq_id);
+    fprintf(stderr, "[session] evicted conv=%s owner=%s seq=%d (per-user LRU)\n",
+            doomed.id.c_str(), doomed.owner.c_str(), (int) doomed.seq_id);
+}
+
 void SessionStore::evict_lru(llama_context* ctx) {
     if (slots_.empty()) return;
     auto it = slots_.begin();
@@ -179,12 +210,26 @@ void SessionStore::evict_lru(llama_context* ctx) {
             (int) doomed.seq_id);
 }
 
-SessionSlot& SessionStore::get_or_create(const std::string& id,
-                                       llama_context* ctx) {
+SessionSlot* SessionStore::get_or_create(const std::string& id,
+                                         llama_context* ctx,
+                                         const std::string& owner,
+                                         SessionErr* err_out) {
+    if (err_out) *err_out = SessionErr::None;
     auto it = slots_.find(id);
     if (it != slots_.end()) {
+        if (!owner.empty() && !it->second.owner.empty() &&
+            it->second.owner != owner) {
+            if (err_out) *err_out = SessionErr::OwnerMismatch;
+            return nullptr;
+        }
+        if (!owner.empty() && it->second.owner.empty())
+            it->second.owner = owner;
         touch(it->second);
-        return it->second;
+        return &it->second;
+    }
+    if (!owner.empty() && max_slots_per_user_ > 0) {
+        while (count_for_owner(owner) >= max_slots_per_user_)
+            evict_lru_for_owner(owner, ctx);
     }
     while (slots_.size() >= max_slots_) evict_lru(ctx);
     llama_seq_id seq = alloc_seq();
@@ -194,8 +239,9 @@ SessionSlot& SessionStore::get_or_create(const std::string& id,
     }
     touch(slots_[id]);
     slots_[id].id     = id;
+    slots_[id].owner  = owner;
     slots_[id].seq_id = seq;
-    return slots_[id];
+    return &slots_[id];
 }
 
 void SessionStore::remove(const std::string& id, llama_context* ctx) {

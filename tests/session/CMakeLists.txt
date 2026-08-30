@@ -2,6 +2,10 @@ add_executable(test_session test_session.cpp)
 target_link_libraries(test_session PRIVATE cne_runtime)
 add_test(NAME session_lcp COMMAND test_session)
 
+add_executable(test_session_tenant test_session_tenant.cpp)
+target_link_libraries(test_session_tenant PRIVATE cne_runtime)
+add_test(NAME session_tenant COMMAND test_session_tenant)
+
 add_executable(test_session_kv test_session_kv.cpp)
 target_link_libraries(test_session_kv PRIVATE cne_runtime cne_e2e_config)
 add_test(NAME session_kv_live COMMAND test_session_kv)

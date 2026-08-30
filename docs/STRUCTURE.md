@@ -82,7 +82,8 @@ Scripts under `bench/scripts/`; results under `bench/results/` (gitignored).
 | File | Audience |
 |---|---|
 | `FEATURES.md` | Feature guide for operators |
-| `SETUP.md` | Build and model fetch |
+| `SETUP.md` | Build, `cne_setup`, and `server.json` |
+| `SERVING.md` | Multi-user API: architecture, limits, roadmap |
 | `TESTING.md` | Live integration tests (JSON configs, `ctest`) |
 | `BENCHMARKS.md` | Reproducible measurement protocol |
 | `models/` | Per-model serving notes |

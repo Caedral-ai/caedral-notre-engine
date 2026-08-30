@@ -111,11 +111,12 @@ int run_live(const char* model_path, const cne::e2e::RuntimeOpts& ro) {
     }
 
     llama_sampler* smpl = greedy_sampler();
-    cne::SessionSlot& slot = store.get_or_create("test", ctx);
+    cne::SessionSlot* slot = store.get_or_create("test", ctx);
+    assert(slot);
 
     // ---- turn 1 (session path) ----
     cne::SessionPrefillStats st1;
-    if (!cne::session_prefill(ctx, slot, prompt1, &st1)) {
+    if (!cne::session_prefill(ctx, *slot, prompt1, &st1)) {
         fprintf(stderr, "FAIL: turn-1 session_prefill\n");
         return 1;
     }
@@ -128,24 +129,24 @@ int run_live(const char* model_path, const cne::e2e::RuntimeOpts& ro) {
 
     const int n_gen1 = 16;
     const std::vector<llama_token> gen1 =
-        greedy_decode(slot, ctx, smpl, vocab, n_gen1);
+        greedy_decode(*slot, ctx, smpl, vocab, n_gen1);
     if (gen1.empty()) {
         fprintf(stderr, "FAIL: turn-1 produced no tokens\n");
         return 1;
     }
-    if (slot.kv_tokens.size() != prompt1.size() + gen1.size()) {
+    if (slot->kv_tokens.size() != prompt1.size() + gen1.size()) {
         fprintf(stderr, "FAIL: slot size after turn-1 (%zu != %zu)\n",
-                slot.kv_tokens.size(), prompt1.size() + gen1.size());
+                slot->kv_tokens.size(), prompt1.size() + gen1.size());
         return 1;
     }
-    if (cne::kv_seq_len(ctx, slot.seq_id) != (int) slot.kv_tokens.size()) {
+    if (cne::kv_seq_len(ctx, slot->seq_id) != (int) slot->kv_tokens.size()) {
         fprintf(stderr, "FAIL: KV len %d != slot %zu after turn-1\n",
-                cne::kv_seq_len(ctx, slot.seq_id), slot.kv_tokens.size());
+                cne::kv_seq_len(ctx, slot->seq_id), slot->kv_tokens.size());
         return 1;
     }
 
     // ---- turn 2 prompt: prior KV + new tail ----
-    std::vector<llama_token> prompt2 = slot.kv_tokens;
+    std::vector<llama_token> prompt2 = slot->kv_tokens;
     const std::vector<llama_token> tail =
         tokenize(vocab, " The river Seine flows through");
     prompt2.insert(prompt2.end(), tail.begin(), tail.end());
@@ -153,7 +154,7 @@ int run_live(const char* model_path, const cne::e2e::RuntimeOpts& ro) {
     const size_t expect_reused = prompt1.size() + gen1.size();
 
     cne::SessionPrefillStats st2;
-    if (!cne::session_prefill(ctx, slot, prompt2, &st2)) {
+    if (!cne::session_prefill(ctx, *slot, prompt2, &st2)) {
         fprintf(stderr, "FAIL: turn-2 session_prefill\n");
         return 1;
     }
@@ -173,7 +174,7 @@ int run_live(const char* model_path, const cne::e2e::RuntimeOpts& ro) {
     llama_sampler_reset(smpl);
     const int n_gen2 = 16;
     const std::vector<llama_token> gen2_session =
-        greedy_decode(slot, ctx, smpl, vocab, n_gen2);
+        greedy_decode(*slot, ctx, smpl, vocab, n_gen2);
 
     if (!full_prefill_seq0(ctx, prompt2)) {
         fprintf(stderr, "FAIL: stateless prefill\n");
@@ -194,29 +195,31 @@ int run_live(const char* model_path, const cne::e2e::RuntimeOpts& ro) {
 
     // ---- alternating users: A -> B -> A (warm KV on A's seq) ----
     store.remove("test", ctx);
-    cne::SessionSlot& slotA = store.get_or_create("user-a", ctx);
+    cne::SessionSlot* slotA = store.get_or_create("user-a", ctx);
+    assert(slotA);
     const std::vector<llama_token> promptA1 =
         tokenize(vocab, "User alpha says hello");
     cne::SessionPrefillStats stA1;
-    if (!cne::session_prefill(ctx, slotA, promptA1, &stA1)) return 1;
+    if (!cne::session_prefill(ctx, *slotA, promptA1, &stA1)) return 1;
     const std::vector<llama_token> genA1 =
-        greedy_decode(slotA, ctx, smpl, vocab, 8);
-    const size_t a_warm = slotA.kv_tokens.size();
+        greedy_decode(*slotA, ctx, smpl, vocab, 8);
+    const size_t a_warm = slotA->kv_tokens.size();
 
-    cne::SessionSlot& slotB = store.get_or_create("user-b", ctx);
-    assert(slotB.seq_id != slotA.seq_id);
+    cne::SessionSlot* slotB = store.get_or_create("user-b", ctx);
+    assert(slotB);
+    assert(slotB->seq_id != slotA->seq_id);
     const std::vector<llama_token> promptB1 =
         tokenize(vocab, "User beta says goodbye");
-    if (!cne::session_prefill(ctx, slotB, promptB1, nullptr)) return 1;
-    (void) greedy_decode(slotB, ctx, smpl, vocab, 8);
+    if (!cne::session_prefill(ctx, *slotB, promptB1, nullptr)) return 1;
+    (void) greedy_decode(*slotB, ctx, smpl, vocab, 8);
 
-    std::vector<llama_token> promptA2 = slotA.kv_tokens;
+    std::vector<llama_token> promptA2 = slotA->kv_tokens;
     const std::vector<llama_token> tailA =
         tokenize(vocab, " and asks again");
     promptA2.insert(promptA2.end(), tailA.begin(), tailA.end());
 
     cne::SessionPrefillStats stA2;
-    if (!cne::session_prefill(ctx, slotA, promptA2, &stA2)) return 1;
+    if (!cne::session_prefill(ctx, *slotA, promptA2, &stA2)) return 1;
     if (stA2.reused_tokens != a_warm) {
         fprintf(stderr,
                 "FAIL: alternating users reused=%zu (want %zu)\n",

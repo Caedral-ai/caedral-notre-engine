@@ -8,6 +8,7 @@
 
 #include "cne_runtime.h"
 #include "cne_session.h"
+#include "cne_api.h"
 #include "cne_stream_cb.h"
 #include "cne_stream_spec.h"
 
@@ -23,10 +24,13 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
@@ -52,7 +56,14 @@ const ConfigKnob g_config_knobs[] = {
     {"ctx", "CTX"},             {"cache_gib", "CACHE_GIB"},
     {"dense", "DENSE"},         {"max_req_s", "MAX_REQ_S"},
     {"session_max", "SESSION_MAX"},
+    {"api_mode", "API_MODE"},
+    {"api_rpm", "API_RPM"},
+    {"session_max_per_user", "SESSION_MAX_PER_USER"},
 };
+
+// API keys from server.json (merged at boot); not injected as env.
+std::unordered_set<std::string>              g_cfg_api_keys;
+std::unordered_map<std::string, std::string> g_cfg_key_to_user;
 
 // model_out stays empty when the config does not name one (argv supplies it).
 void apply_config_file(const std::string& path, std::string& model_out,
@@ -98,6 +109,26 @@ void apply_config_file(const std::string& path, std::string& model_out,
         host_out = cfg["host"].get<std::string>();
     if (cfg.contains("port") && cfg["port"].is_number_integer())
         port_out = cfg["port"].get<int>();
+
+    if (cfg.contains("api_keys") && cfg["api_keys"].is_array()) {
+        for (const auto& v : cfg["api_keys"]) {
+            if (!v.is_string()) continue;
+            const std::string key = v.get<std::string>();
+            if (!key.empty()) g_cfg_api_keys.insert(key);
+        }
+    }
+    if (cfg.contains("api_keys_file") && cfg["api_keys_file"].is_string()) {
+        const std::string path = cfg["api_keys_file"].get<std::string>();
+        if (!getenv("CNE_API_KEYS_FILE")) {
+#ifdef _WIN32
+            _putenv_s("CNE_API_KEYS_FILE", path.c_str());
+#else
+            setenv("CNE_API_KEYS_FILE", path.c_str(), 1);
+#endif
+            fprintf(stderr, "[config] API_KEYS_FILE = %s (config)\n",
+                    path.c_str());
+        }
+    }
 }
 
 // ---- engine state -----------------------------------------------------------
@@ -113,6 +144,7 @@ struct Engine {
     llama_context*     ctx       = nullptr;
     const llama_vocab* vocab     = nullptr;
     int                n_ctx     = 0;
+    int                n_ctx_per_seq = 0;
     size_t             cache_cap = 0;
     int                mtp_k     = 0;
     float              mtp_p_min = 0.0f;
@@ -130,6 +162,47 @@ struct Engine {
 
 Engine g_engine;
 std::atomic<long long> g_req_counter{0};
+
+struct ApiState {
+    cne::api::Settings settings;
+    std::unordered_set<std::string>              keys;
+    std::unordered_map<std::string, std::string> key_to_user;
+    std::unique_ptr<cne::api::RateLimiter>       limiter;
+};
+
+ApiState g_api;
+
+std::unordered_map<std::string, std::string> collect_headers(
+    const httplib::Request& req) {
+    std::unordered_map<std::string, std::string> out;
+    for (const auto& h : req.headers) out[h.first] = h.second;
+    return out;
+}
+
+void merge_api_keys() {
+    cne::api::load_keys(g_api.keys, g_api.key_to_user);
+    for (const auto& k : g_cfg_api_keys) g_api.keys.insert(k);
+}
+
+void init_api_state() {
+    g_api.settings = cne::api::load_settings();
+    merge_api_keys();
+    g_api.limiter =
+        std::make_unique<cne::api::RateLimiter>(g_api.settings.rpm_per_user);
+    if (g_api.settings.session_max_per_user > 0)
+        g_engine.sessions.set_max_slots_per_user(
+            g_api.settings.session_max_per_user);
+    if (g_api.settings.enabled) {
+        fprintf(stderr,
+                "[api] multi-tenant mode on (rpm=%d session_max_per_user=%zu "
+                "keys=%zu)\n",
+                g_api.settings.rpm_per_user,
+                g_api.settings.session_max_per_user, g_api.keys.size());
+        if (g_api.keys.empty())
+            fprintf(stderr,
+                    "[api] WARNING: API mode enabled but no keys configured\n");
+    }
+}
 
 json error_body(const std::string& message, const std::string& type) {
     return json{
@@ -388,7 +461,8 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
 // Conversation KV binding. Returns nullptr for stateless requests (no id, MTP,
 // or CNE_SESSION=0). Caller must hold eng.gen_mutex.
 cne::SessionSlot* bind_conversation(Engine& eng, const std::string& conv_id,
-                                    bool clear_conv) {
+                                    bool clear_conv,
+                                    const std::string& owner = {}) {
     const bool want =
         eng.sessions_enabled && !conv_id.empty() && eng.mtp_k == 0;
     if (!want) {
@@ -398,13 +472,85 @@ cne::SessionSlot* bind_conversation(Engine& eng, const std::string& conv_id,
                     "[session] conversation_id ignored (MTP active)\n");
         return nullptr;
     }
+    cne::SessionErr err = cne::SessionErr::None;
     if (clear_conv) {
         eng.sessions.remove(conv_id, eng.ctx);
         eng.active_conv_id = conv_id;
-        return &eng.sessions.get_or_create(conv_id, eng.ctx);
+        return eng.sessions.get_or_create(conv_id, eng.ctx, owner, &err);
     }
     eng.active_conv_id = conv_id;
-    return &eng.sessions.get_or_create(conv_id, eng.ctx);
+    return eng.sessions.get_or_create(conv_id, eng.ctx, owner, &err);
+}
+
+// Drop oldest non-system messages until rendered prompt fits the token budget.
+static size_t trim_messages_for_context(
+    json& messages, const std::function<int(const json&)>& count_tokens,
+    int max_prompt_tokens) {
+    size_t dropped = 0;
+    while (!messages.empty()) {
+        const int n = count_tokens(messages);
+        if (n <= 0) break;
+        if (n <= max_prompt_tokens) return dropped;
+        size_t drop_at = 0;
+        while (drop_at < messages.size() &&
+               messages[drop_at].value("role", "") == "system")
+            drop_at++;
+        if (drop_at >= messages.size()) break;
+        messages.erase(messages.begin() + (long) drop_at);
+        dropped++;
+    }
+    return dropped;
+}
+
+static bool resolve_conversation_id(const json& body,
+                                    const std::string& conv_hdr,
+                                    const std::string& api_user, bool api_mode,
+                                    std::string& conv_out, std::string& err,
+                                    int& http_status) {
+    conv_out.clear();
+    err.clear();
+    http_status = 400;
+
+    std::string chat_id;
+    if (body.contains("chat_id") && body["chat_id"].is_string())
+        chat_id = body["chat_id"].get<std::string>();
+
+    std::string conv_id;
+    if (body.contains("conversation_id") &&
+        body["conversation_id"].is_string())
+        conv_id = body["conversation_id"].get<std::string>();
+    else if (!conv_hdr.empty())
+        conv_id = conv_hdr;
+
+    if (!api_mode) {
+        conv_out = conv_id;
+        return true;
+    }
+
+    if (!chat_id.empty() && !conv_id.empty()) {
+        err         = "send either chat_id or conversation_id, not both";
+        http_status = 400;
+        return false;
+    }
+    if (!chat_id.empty()) {
+        conv_out = cne::api::make_conversation_id(api_user, chat_id);
+        return true;
+    }
+    if (!conv_id.empty()) {
+        if (!cne::api::conversation_owned_by(conv_id, api_user)) {
+            err         = "conversation_id does not belong to authenticated user";
+            http_status = 403;
+            return false;
+        }
+        conv_out = conv_id;
+        return true;
+    }
+    if (g_api.settings.require_chat_id) {
+        err         = "chat_id required in API mode for session reuse";
+        http_status = 400;
+        return false;
+    }
+    return true;
 }
 
 // Draft-MTP speculative arm (greedy only - lossless contract).
@@ -523,8 +669,10 @@ json chunk_base(const std::string& id, const std::string& model) {
 }
 
 void handle_chat(httplib::Response& res, const json& body,
-                 const std::string& conv_hdr = "") {
+                 const std::string& conv_hdr = "",
+                 const std::string& api_user = "") {
     Engine& eng = g_engine;
+    const bool api_mode = g_api.settings.enabled && !api_user.empty();
 
     bool  want_stream = body.value("stream", false);
     float temperature = body.value("temperature", 0.0f);
@@ -535,11 +683,17 @@ void handle_chat(httplib::Response& res, const json& body,
     if (max_tokens < 1) max_tokens = 1;
 
     std::string conv_id;
-    if (body.contains("conversation_id") &&
-        body["conversation_id"].is_string())
-        conv_id = body["conversation_id"].get<std::string>();
-    else if (!conv_hdr.empty())
-        conv_id = conv_hdr;
+    {
+        std::string err;
+        int         st = 400;
+        if (!resolve_conversation_id(body, conv_hdr, api_user, api_mode,
+                                     conv_id, err, st)) {
+            res.status = st;
+            set_json(res, error_body(err, st == 403 ? "permission_error"
+                                                    : "invalid_request_error"));
+            return;
+        }
+    }
     const bool clear_conv = body.value("clear_conversation", false);
 
     // Thinking control. Default = model behavior (think on). Override:
@@ -553,6 +707,47 @@ void handle_chat(httplib::Response& res, const json& body,
             body["chat_template_kwargs"]["enable_thinking"].get<bool>();
 
     json messages = body["messages"];
+
+    const int lane_ctx =
+        eng.n_ctx_per_seq > 0 ? eng.n_ctx_per_seq : eng.n_ctx;
+    const int max_prompt_tokens = lane_ctx - max_tokens - 4;
+    if (max_prompt_tokens < 1) {
+        res.status = 400;
+        set_json(res, error_body(
+            "max_tokens too large for context lane (" +
+                std::to_string(lane_ctx) + " tokens)",
+            "invalid_request_error"));
+        return;
+    }
+
+    auto count_msg_tokens = [&](const json& msgs) -> int {
+        std::string rendered, terr;
+        if (!apply_chat_template(msgs, rendered, terr)) return -1;
+        return (int) tokenize(rendered, false).size();
+    };
+
+    const size_t trimmed =
+        trim_messages_for_context(messages, count_msg_tokens, max_prompt_tokens);
+    if (trimmed > 0)
+        fprintf(stderr, "[api] trimmed %zu oldest message(s) user=%s\n",
+                trimmed, api_user.empty() ? "-" : api_user.c_str());
+
+    const int final_prompt_tokens = count_msg_tokens(messages);
+    if (final_prompt_tokens < 0) {
+        res.status = 400;
+        set_json(res, error_body("could not tokenize messages",
+                                 "invalid_request_error"));
+        return;
+    }
+    if (final_prompt_tokens > max_prompt_tokens) {
+        res.status = 400;
+        set_json(res, error_body(
+            "messages exceed context lane (" +
+                std::to_string(lane_ctx) +
+                " tokens) even after trim; shorten system prompt or max_tokens",
+            "context_length_exceeded"));
+        return;
+    }
 
     std::string rendered, err;
     if (!apply_chat_template(messages, rendered, err)) {
@@ -597,15 +792,14 @@ void handle_chat(httplib::Response& res, const json& body,
         fprintf(stderr, "[debug] rendered prompt (%zu chars):\n%s\n<<<END>>>\n",
                 rendered.size(), rendered.c_str());
 
-    // Context guard: fail loudly instead of the mid-run abort the default
-    // small context produces under MTP ("failed to find a memory slot").
-    int headroom = eng.n_ctx - (int)prompt.size() - 4;
+    // Context guard: per-lane limit when multi-seq sessions are active.
+    int headroom = lane_ctx - (int)prompt.size() - 4;
     if (headroom < 1) {
         res.status = 400;
         set_json(res, error_body(
             "prompt of " + std::to_string(prompt.size()) +
-                " tokens does not fit context of " + std::to_string(eng.n_ctx) +
-                "; raise CNE_CTX",
+                " tokens does not fit context lane of " +
+                std::to_string(lane_ctx) + "; raise CNE_CTX or trim messages",
             "context_length_exceeded"));
         return;
     }
@@ -631,7 +825,14 @@ void handle_chat(httplib::Response& res, const json& body,
         }
     } decode_guard{eng};
 
-    cne::SessionSlot* slot = bind_conversation(eng, conv_id, clear_conv);
+    cne::SessionSlot* slot =
+        bind_conversation(eng, conv_id, clear_conv, api_user);
+    if (api_mode && !conv_id.empty() && slot == nullptr) {
+        res.status = 403;
+        set_json(res, error_body("conversation owned by another user",
+                                 "permission_error"));
+        return;
+    }
     cne::SessionPrefillStats prefill_stats;
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -978,6 +1179,8 @@ int main(int argc, char** argv) {
     g_engine.n_ctx            = rt->n_ctx;
 
     g_engine.sessions.set_seq_capacity(llama_n_seq_max(g_engine.ctx));
+    g_engine.n_ctx_per_seq = (int) llama_n_ctx_seq(g_engine.ctx);
+    init_api_state();
     if (g_engine.sessions_enabled)
         fprintf(stderr,
                 "[server] conversation KV reuse on (max %zu slots, %u seq "
@@ -1022,7 +1225,14 @@ int main(int argc, char** argv) {
                 {"active", g_engine.decode_active.load()},
             }},
             {"cache_cap_mib", g_engine.cache_cap >> 20},
-            {"n_ctx", g_engine.n_ctx}});
+            {"n_ctx", g_engine.n_ctx},
+            {"n_ctx_per_seq", g_engine.n_ctx_per_seq},
+            {"api", json{
+                {"enabled", g_api.settings.enabled},
+                {"rpm_per_user", g_api.settings.rpm_per_user},
+                {"session_max_per_user", g_api.settings.session_max_per_user},
+                {"keys_loaded", g_api.keys.size()},
+            }}});
     });
 
     svr.Get("/v1/models", [&](const httplib::Request&,
@@ -1059,7 +1269,33 @@ int main(int argc, char** argv) {
                  std::string conv_hdr;
                  if (req.has_header("X-Conversation-Id"))
                      conv_hdr = req.get_header_value("X-Conversation-Id");
-                 handle_chat(res, body, conv_hdr);
+
+                 std::string api_user;
+                 if (g_api.settings.enabled) {
+                     const auto headers = collect_headers(req);
+                     const auto auth = cne::api::authenticate(
+                         headers, g_api.settings, g_api.keys,
+                         g_api.key_to_user);
+                     if (!auth.ok) {
+                         res.status = auth.http_status;
+                         set_json(res, error_body(auth.error,
+                             auth.http_status == 403
+                                 ? "permission_error"
+                                 : auth.http_status == 503
+                                       ? "server_error"
+                                       : "authentication_error"));
+                         return;
+                     }
+                     if (!g_api.limiter->allow(auth.user_id)) {
+                         res.status = 429;
+                         set_json(res, error_body(
+                             "rate limit exceeded (requests per minute)",
+                             "rate_limit_error"));
+                         return;
+                     }
+                     api_user = auth.user_id;
+                 }
+                 handle_chat(res, body, conv_hdr, api_user);
              });
 
     printf("cne-server: model=%s regime=%s dense=%s stream=%d mtp_k=%d "

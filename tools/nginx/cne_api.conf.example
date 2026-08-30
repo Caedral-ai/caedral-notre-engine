@@ -1,0 +1,43 @@
+# Example reverse proxy for cne_server multi-user API.
+# TLS certificates and rate-limit zones are site-specific — fill in paths.
+#
+# Usage:
+#   1. Run cne_server on 127.0.0.1:8080 with API mode (see docs/SERVING.md).
+#   2. Point clients at https://api.example.com/v1/... (this proxy).
+#   3. Your app still sends Authorization + X-User-Id to cne_server
+#      (proxy can inject them from JWT after auth).
+
+limit_req_zone $binary_remote_addr zone=cne_api:10m rate=30r/m;
+
+upstream cne_backend {
+    server 127.0.0.1:8080;
+    keepalive 8;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+
+    # ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    client_max_body_size 4m;
+
+    location /health {
+        proxy_pass http://cne_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /v1/ {
+        limit_req zone=cne_api burst=10 nodelay;
+        proxy_pass http://cne_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        # Optional: strip client Authorization and inject server-side key:
+        # proxy_set_header Authorization "Bearer $cne_internal_key";
+    }
+}

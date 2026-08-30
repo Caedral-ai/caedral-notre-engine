@@ -381,16 +381,37 @@ Server-specific knobs:
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
 | `CNE_SESSION=0` | disable conversation KV reuse (default on when `conversation_id` is sent) |
-| `CNE_SESSION_MAX=N` | LRU cap on tracked conversations (default 8) |
+| `CNE_SESSION_MAX=N` | LRU cap on tracked conversations; also sets `n_seq_max` KV lanes at boot (default 8 if unset; `cne_setup` usually suggests 2) |
 | `CNE_KV_BPT=N` | KV bytes/token estimate for boot warnings (default ~20480) |
+
+| `CNE_API_MODE` | `1` | Enable API key auth + `chat_id` tenancy |
+| `CNE_API_KEY` | secret | Single development key |
+| `CNE_API_KEYS` | `k1,k2` | Comma-separated keys |
+| `CNE_API_KEYS_FILE` | path | One key per line (`key` or `key user_id`) |
+| `CNE_API_RPM` | N | Per-user requests/minute (0 = off) |
+| `CNE_SESSION_MAX_PER_USER` | N | Max parked chats per user (default 2 in API mode) |
+
+Config file keys: `api_mode`, `api_keys` (array), `api_keys_file`, `api_rpm`,
+`session_max_per_user`. See `tools/api_keys.example.txt`.
 
 Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
 tail; logs `[session] reused=N prefilled=M`. Different users can share one
 server (requests still serialize); each `conversation_id` keeps its own KV
-lane until LRU eviction. Omit `conversation_id` for stateless behavior (seq
-0 only, cleared after each request). `clear_conversation: true` drops cached
-KV for that id.
+lane until global LRU eviction. Omit `conversation_id` for stateless behavior
+(seq 0 only, cleared after each request). `clear_conversation: true` drops
+cached KV for that id.
+
+**Context lanes:** total `ctx` is split **evenly** at boot
+(`per_lane = ctx / session_max`). Unused tokens in one chat are not given to
+another. There is no server-side auto-truncate or summarize when a lane fills
+— clients (or your API proxy) must trim the `messages` they send. If a user
+opens more distinct `conversation_id`s than `session_max`, the least recently
+used conversation is evicted (any user). There is no per-tenant isolation in
+v1; see **docs/SERVING.md** for API-layer mitigations and the engine roadmap.
+
+**Decode:** one request at a time (`gen_mutex`); multiple users are not batched
+into one forward pass. `session_max` parks KV only.
 
 **Requires `CNE_MTP=0` (or unset).** Sessions and draft-MTP cannot be
 combined on the server — see §5 for why. Use sequential decode for
@@ -423,3 +444,7 @@ Behavior notes:
 **Live tests:** `server_e2e_live` forks this binary and checks
 `/v1/chat/completions` plus session KV reuse. Config and `ctest` commands:
 **docs/TESTING.md**.
+
+**Multi-user API:** auth, quotas, fair session eviction, and client context
+policy are documented in **docs/SERVING.md** (operate with a proxy now; tenant
+sessions planned in-engine).
