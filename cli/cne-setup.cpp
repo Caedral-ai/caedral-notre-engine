@@ -110,7 +110,7 @@ std::vector<fs::path> scan_artifacts(const fs::path& dir) {
 }
 
 // Suggestion table. Sources: SERVER.md section 6 measurements and the
-// operational rules in ENGINE_STATUS.md section 7/8.
+// operational rules in internal-docs/ops/ENGINE_STATUS.md section 7/8.
 std::vector<Item> build_suggestions(const fs::path& artifact,
                                     uint64_t model_bytes,
                                     const cne::MemoryBudget& budget,
