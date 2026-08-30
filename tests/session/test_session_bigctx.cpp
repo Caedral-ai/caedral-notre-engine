@@ -1,8 +1,7 @@
-// Big-context session E2E (opt-in). Requires CNE_TEST_MODEL; skipped when unset.
-// Exercises chunked prefill at ~7k tokens, turn-2 KV reuse, and greedy parity
-// vs a stateless full prefill at CNE_TEST_CTX (default 8192).
+// Big-context session E2E. Config: tests/e2e/session_bigctx.json
 #include "cne_runtime.h"
 #include "cne_session.h"
+#include "e2e_config.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,6 +9,8 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
 
 namespace {
 
@@ -97,10 +98,14 @@ double elapsed_s(const std::chrono::steady_clock::time_point& t0) {
         .count();
 }
 
-int run_live(const char* model_path) {
-    const int n_ctx       = env_int("CNE_TEST_CTX", 8192);
-    const int prompt_tok  = env_int("CNE_TEST_PROMPT_TOK", 7000);
-    const int n_gen       = env_int("CNE_TEST_GEN", 16);
+int run_live(const char* model_path, const cne::e2e::Config& cfg) {
+    const int n_ctx =
+        cfg.runtime.n_ctx > 0 ? cfg.runtime.n_ctx : env_int("CNE_TEST_CTX", 8192);
+    const int prompt_tok = cfg.prompt_tokens > 0
+                               ? cfg.prompt_tokens
+                               : env_int("CNE_TEST_PROMPT_TOK", 7000);
+    const int n_gen =
+        cfg.gen_tokens > 0 ? cfg.gen_tokens : env_int("CNE_TEST_GEN", 16);
 
     if (prompt_tok < 512 || prompt_tok + n_gen + 64 > n_ctx) {
         fprintf(stderr,
@@ -109,14 +114,12 @@ int run_live(const char* model_path) {
         return 1;
     }
 
-    setenv("CNE_SESSION_MAX", "1", 1);
-
     cne::RuntimeSettings rs;
     rs.model_path = model_path;
-    rs.cap_gib    = 4;
+    rs.cap_gib    = cfg.runtime.cap_gib;
     rs.n_ctx      = n_ctx;
-    rs.n_threads  = 4;
-    rs.stream_on  = false;
+    rs.n_threads  = cfg.runtime.n_threads > 0 ? cfg.runtime.n_threads : 4;
+    rs.stream_on  = cfg.runtime.stream_on;
 
     auto t0 = std::chrono::steady_clock::now();
     auto rt = cne::runtime_prepare(rs);
@@ -238,10 +241,29 @@ int run_live(const char* model_path) {
 } // namespace
 
 int main() {
-    const char* model = getenv("CNE_TEST_MODEL");
-    if (!model || !model[0]) {
-        printf("skip: session_bigctx live (set CNE_TEST_MODEL)\n");
+    const std::string src = CNE_PROJECT_SOURCE_DIR;
+    const std::string cfg_path =
+        cne::e2e::discover_path("tests/e2e/session_bigctx_live.json", src);
+
+    cne::e2e::Config cfg;
+    std::string err;
+    if (!cne::e2e::load(cfg_path, src, cfg, err)) {
+        fprintf(stderr, "FAIL: e2e config %s (%s)\n", cfg_path.c_str(),
+                err.c_str());
+        return 1;
+    }
+    cne::e2e::apply_env(cfg);
+
+    const std::string model = cne::e2e::resolve_model(cfg, src);
+    if (model.empty()) {
+        printf("skip: session_bigctx live (set model in %s or CNE_TEST_MODEL)\n",
+               cfg_path.c_str());
         return 0;
     }
-    return run_live(model);
+    if (access(model.c_str(), R_OK) != 0) {
+        printf("skip: session_bigctx live (model not found: %s)\n",
+                model.c_str());
+        return 0;
+    }
+    return run_live(model.c_str(), cfg);
 }

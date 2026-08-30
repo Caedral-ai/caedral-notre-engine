@@ -35,6 +35,10 @@ if(CNE_WITH_LLAMA)
     add_subdirectory(runtime)
 endif()
 
+if(CNE_BUILD_SERVER)
+    add_subdirectory(server)
+endif()
+
 if(CNE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
@@ -42,10 +46,6 @@ endif()
 
 if(CNE_BUILD_TOOLS)
     add_subdirectory(tools)
-endif()
-
-if(CNE_BUILD_SERVER)
-    add_subdirectory(server)
 endif()
 
 if(CNE_BUILD_CLI)

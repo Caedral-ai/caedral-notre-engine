@@ -1,0 +1,14 @@
+{
+  "description": "LFM2 session KV reuse at ctx=2048, two seq lanes",
+  "model": "models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf",
+  "env": {
+    "CNE_SESSION_MAX": "2",
+    "CNE_STREAM": "0"
+  },
+  "runtime": {
+    "cap_gib": 0,
+    "n_ctx": 2048,
+    "n_threads": 4,
+    "stream_on": false
+  }
+}
