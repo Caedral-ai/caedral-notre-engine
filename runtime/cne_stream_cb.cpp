@@ -59,9 +59,34 @@ uint64_t g_fill_calls = 0;
 
 // ---- Dense residency (ANON binding observed via callback edges) ----------
 std::unordered_map<std::string, void*> g_dense_bind;   // name -> anon copy
+std::unordered_map<void*, size_t> g_expert_mmap;       // routed expert spans (trim list)
 std::unordered_set<std::string> g_dense_names;         // manifest non-routed names
 size_t g_dense_anon_bytes = 0;
 bool g_anon_scan = false;                              // scan pass observes all nodes
+
+size_t page_size() {
+    static const size_t psz = (size_t)sysconf(_SC_PAGESIZE);
+    return psz ? psz : 4096;
+}
+
+void drop_resident_pages(void* ptr, size_t nbytes) {
+    if (!ptr || nbytes == 0) return;
+    const size_t psz = page_size();
+    uintptr_t start = (uintptr_t)ptr & ~(psz - 1);
+    uintptr_t end =
+        ((uintptr_t)ptr + nbytes + psz - 1) & ~(psz - 1);
+    if (end <= start) return;
+    if (madvise((void*)start, end - start, MADV_DONTNEED) != 0)
+        perror("madvise");
+}
+
+bool dense_drop_mmap_enabled() {
+    static const int v = [] {
+        const char* e = cne::env("DENSE_DROP_MMAP");
+        return (!e || strcmp(e, "0") != 0) ? 1 : 0;
+    }();
+    return v != 0;
+}
 
 // bind one weight tensor to an anonymous copy (ANON policy)
 void try_bind_dense(const ggml_tensor* s) {
@@ -70,18 +95,34 @@ void try_bind_dense(const ggml_tensor* s) {
     if (!g_dense_names.count(nm) || g_dense_bind.count(nm)) return;
     size_t bytes = ggml_nbytes(s);
     if (bytes == 0 || bytes > (2ull << 30)) return;
+    void* orig = s->data;
     void* buf = nullptr;
     if (posix_memalign(&buf, 4096, bytes) != 0) return;
-    memcpy(buf, s->data, bytes);
+    memcpy(buf, orig, bytes);
     ((ggml_tensor*)s)->data = buf;
     g_dense_bind[nm] = buf;
     g_dense_anon_bytes += bytes;
+    if (dense_drop_mmap_enabled())
+        drop_resident_pages(orig, bytes);
+}
+
+void try_record_expert_mmap(const ggml_tensor* s) {
+    if (!s || !s->name || !s->data || s->type == GGML_TYPE_I32) return;
+    std::string nm(s->name);
+    if (g_dense_names.count(nm) || nm.find("_exps") == std::string::npos) return;
+    size_t bytes = ggml_nbytes(s);
+    if (bytes == 0) return;
+    auto it = g_expert_mmap.find(s->data);
+    if (it == g_expert_mmap.end() || it->second < bytes)
+        g_expert_mmap[s->data] = bytes;
 }
 
 void scan_dense_srcs(ggml_tensor* t) {
     if (!t) return;
-    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++)
+    for (int i = 0; i < GGML_MAX_SRC && t->src[i]; i++) {
+        try_record_expert_mmap(t->src[i]);
         try_bind_dense(t->src[i]);
+    }
 }
 
 bool od_read(void* dest, uint64_t off, size_t bytes, void* ud) {
@@ -568,6 +609,28 @@ bool stream_use_odirect() { return g_use_odirect; }
 
 void stream_anon_scan_begin() { g_anon_scan = true; }
 void stream_anon_scan_end()   { g_anon_scan = false; }
+
+size_t stream_anon_finalize() {
+    if (!dense_drop_mmap_enabled())
+        return 0;
+    size_t dropped = 0;
+    for (const auto& [ptr, bytes] : g_expert_mmap) {
+        drop_resident_pages(ptr, bytes);
+        dropped += bytes;
+    }
+    if (dropped)
+        printf("dense=anon: dropped %.1f MiB expert mmap RSS\n",
+               dropped / 1048576.0);
+    return dropped;
+}
+
+void stream_expert_mmap_trim() {
+    if (!dense_drop_mmap_enabled() || g_rebind)
+        return;
+    for (const auto& [ptr, bytes] : g_expert_mmap)
+        drop_resident_pages(ptr, bytes);
+}
+
 size_t stream_dense_bound_count() { return g_dense_bind.size(); }
 size_t stream_dense_anon_bytes()  { return g_dense_anon_bytes; }
 
@@ -604,6 +667,7 @@ void stream_prefetch_kick_full() {
 void stream_set_step(long step) { g.step = step; }
 
 void stream_step_boundary() {
+    stream_expert_mmap_trim();
     g_id_slot ^= 1;   // step boundary: previous becomes read-only source
     g_step_ids[g_id_slot].clear();
     g_looked.clear();

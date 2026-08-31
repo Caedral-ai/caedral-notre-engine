@@ -175,3 +175,54 @@ B4 prepare-time gate‖up fusion passed identity but was **slower than the custo
 kernel path** and was reverted. Next lossless kernel work: shortconv GEMV (~14%
 decode wall per graph census), optional AVX-VNNI `4vx` inner loop — see
 [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Kernel roadmap.
+
+## LFM2.5-8B-A1B (4 GiB + velocity artifact)
+
+AtomicChat UD-Q4_K_XL, no MTP. Full profile:
+[models/lfm2.5-8b-a1b.md](models/lfm2.5-8b-a1b.md).
+
+### Measured (i5-1135G7-class, prepared UD-Q4_K_XL, 2026-08-31)
+
+**64-token smoke** (`memory-profile.sh` / short `cne_bench`):
+
+| profile | RSS (HWM) | tok/s | tool / config |
+|---|---|---|---|
+| **4 GiB — anon, stream off** | **~2.9 GiB** | **~12** | ctx 1024, t4 |
+| 4 GiB — anon, stream on, 3 GiB cache | ~3.8 GiB | ~7.6 | 90% hit-rate |
+| 16 GiB — mmap-dense, stream off | ~4.94 GiB | **~18** | ctx 2048, t4 |
+| mmap + stream 1 GiB (legacy) | ~6.2 GiB | ~1.9 | do not use for 4 GiB |
+
+**250-token sustained decode** (`cne_bench`, greedy, `CNE_IGNORE_EOS=1`):
+
+| profile | RSS (HWM) | tok/s | wall | notes |
+|---|---|---|---|---|
+| **anon, stream off** | **2.89 GiB** | **11.84** | 21.1 s | 4 GiB recommended |
+| anon, stream on, 3 GiB cache | 3.87 GiB | 7.41 | 33.7 s | 96.9% hit; 24% wall in fills |
+| mmap-dense, stream off | 4.96 GiB | 12.86 | 19.4 s | ≥ 6 GiB host |
+
+**Memory harness:** `bench/scripts/lfm2.5/memory-profile.sh` →
+`bench/results/lfm25-memory.tsv`.
+
+### Reproduce
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+./tools/scripts/download-lfm2.5-8b-a1b.sh
+
+# 4 GiB profile (recommended @ 250 tok)
+CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+
+# 4 GiB — stream + 3 GiB cache (LRU; slower @ 250 tok)
+CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+
+# 16 GiB velocity profile
+CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+```
+
+Disable mmap drop (debug): `CNE_DENSE_DROP_MMAP=0`.

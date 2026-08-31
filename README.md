@@ -221,7 +221,7 @@ Recommended profiles:
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
 | LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server |
-| LFM2.5-8B-A1B | 8.5B / ~1.5B | mmap-dense, t4, ctx 4096–8192 | AtomicChat UD-Q4_K_XL; **docs/models/lfm2.5-8b-a1b.md** |
+| LFM2.5-8B-A1B | 8.5B / ~1.5B | **4 GiB:** `dense=anon`, stream off, ctx 1024 · **16 GiB:** mmap-dense, ~18 tok/s | AtomicChat UD-Q4_K_XL; **docs/models/lfm2.5-8b-a1b.md** |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
@@ -324,7 +324,8 @@ Live stack: `ctest --test-dir build -R server_gateway_live --output-on-failure`
 
 | Variable | Values | Effect |
 |---|---|---|
-| `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
+| `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime). **`anon`** on 4 GiB MoE hosts: private dense copy + expert mmap trim (see **docs/models/lfm2.5-8b-a1b.md**) |
+| `CNE_DENSE_DROP_MMAP` | `0` \| unset | unset = drop file-backed RSS after `anon` bind (default on); `0` = debug / A/B only |
 | `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
 | `CNE_LANES` | N | parallel slice-read workers (default 4) |
 | `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k); **incompatible with server `conversation_id` sessions** |

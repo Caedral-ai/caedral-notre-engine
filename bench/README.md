@@ -57,3 +57,27 @@ CNE_BENCH_MAX_TOKENS=1000 ./bench/scripts/lfm2/server-velocity.sh
 
 See [docs/BENCHMARKS.md](../docs/BENCHMARKS.md) and
 [docs/models/lfm2-24b-a2b.md](../docs/models/lfm2-24b-a2b.md) for measured numbers.
+
+## LFM2.5
+
+| Script | What it measures |
+|---|---|
+| `scripts/lfm2.5/memory-profile.sh` | RSS (VmHWM), tok/s, hit-rate across mmap / anon / stream profiles |
+
+```sh
+# Memory + velocity probes (writes bench/results/lfm25-memory.tsv)
+./bench/scripts/lfm2.5/memory-profile.sh
+
+# 250-token sustained decode (canonical length for profile comparison)
+# 4 GiB — anon, no stream: ~11.8 tok/s, ~2.9 GiB peak (recommended)
+CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+
+# 4 GiB — anon + 3 GiB stream cache: ~7.4 tok/s, ~3.9 GiB peak, 97% hit
+CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+```
+
+See [docs/models/lfm2.5-8b-a1b.md](../docs/models/lfm2.5-8b-a1b.md) for serving knobs.

@@ -70,15 +70,23 @@ Controls how non-expert weights live in memory during generation:
 |---|---|---|
 | `mmap` | weights stay file-backed; kernel pages them in/out | default for small models (R0/R1); zero setup cost |
 | `warm` | engine pre-reads dense spans once before generating | rare: dedicated batch machines where first-token latency doesn't matter |
-| `anon` | engine binds every dense weight to a private anonymous copy | models near/above RAM size: eliminates major-page-fault storms (~100x fewer faults measured); costs one extra copy of dense bytes |
+| `anon` | engine binds every dense weight to a private anonymous copy; drops expert mmap RSS and (when stream is off) trims expert pages each decode step | **4 GiB hosts** with MoE models: dense stays fault-free; experts stay demand-paged under a hard RSS cap (~0.5 GiB dense + working experts) |
 
 Default: chosen automatically from the regime (anon above the thrash line,
 mmap below). Explicit values win over the auto choice.
 
-**Use when:** leave it automatic.
-**Avoid when:** never set `anon` on a machine where the model barely fits —
-the copy needs real memory and the budget manager will shrink your expert
-cache to compensate.
+With **`anon`**, the engine also:
+
+- skips `MAP_POPULATE` on model load (llama fork),
+- copies non-expert weights to anonymous memory (~522 MiB for LFM2.5),
+- drops expert mmap RSS after the binding scan, and
+- when **stream is off**, trims expert pages each decode step so RSS stays
+  under a hard cap (demand-paged from disk on the next use).
+
+Disable mmap drop for A/B: `CNE_DENSE_DROP_MMAP=0`.
+
+**Use when:** 4 GiB hosts running MoE models, or R1+ where mmap thrashes.
+**Avoid when:** 16 GiB+ R0 velocity path — use `mmap` unless you measure anon winning.
 
 ## 4. Expert streaming (slice cache + O_DIRECT + I/O lanes)
 
