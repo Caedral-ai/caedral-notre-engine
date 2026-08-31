@@ -20,6 +20,7 @@ Shell helpers — run from the repo root:
 | `scripts/download-lfm2-24b-a2b.sh` | Fetch + verify + prepare LFM2-24B artifact |
 | `scripts/download-lfm2.5-8b-a1b.sh` | Fetch + verify + prepare LFM2.5-8B-A1B artifact |
 | `../bench/scripts/lfm2.5/memory-profile.sh` | 4 GiB / velocity memory probes for LFM2.5 |
+| `../bench/scripts/lfm2.5/tg250-kernel-ab.sh` | tg250 kernel A/B for LFM2.5 |
 | `scripts/run-canary.sh` | PL-T1 long-gen canary (lossless vs lossy + drift gate) |
 | `scripts/run-ppl.sh` | Perplexity over PTB corpus via `build-meas` llama-perplexity |
 

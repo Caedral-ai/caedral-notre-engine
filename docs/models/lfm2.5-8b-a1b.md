@@ -66,21 +66,40 @@ when `stream` is on. Profile by host:
 |---|---|
 | sha256 after download | OK (pinned in download script) |
 | `cne_prepare` alignment | 66/66 routed tensors, 4096-aligned |
-| `cne_identity_gate` | **PASS** (greedy tokens, rebind=1) |
+| `cne_identity_gate` | **PASS** (greedy tokens, rebind=0/1) |
+| `CNE_KERNELS` tg250 A/B (`llama-bench`, t4, pp512, 5 reps) | **PASS** — **14.79 ± 0.23** vs **12.66 ± 0.11** off (**+16.8%**) |
 | Regime on 16 GiB host | **R0_RESIDENT** (~11.5 GiB RAM available) |
 | `server_e2e_lfm25_live` | **PASS** — chat + session KV reuse |
 
-Custom CPU kernels (`CNE_KERNELS=1`): same top-4 MoE fast path as LFM2-24B-A2B.
-Run `cne_identity_gate` after any quant swap before velocity claims. Internal
-plan (streaming + kernels): `internal-docs/plans/LFM2.5-8B-A1B_STREAM_KERNELS.md`.
+Custom CPU kernels (`CNE_KERNELS=1`): **validated** on this artifact — **+16.8%**
+tg250 vs stock (`llama-bench`, t4, pp512, 5 reps, 2026-08-31). Same top-4 MoE
+fast path as LFM2-24B-A2B. Re-run `cne_identity_gate` after any quant swap.
+Internal plan: `internal-docs/plans/LFM2.5-8B-A1B_STREAM_KERNELS.md`.
 
 ## 5. Measured (2026-08-31, i5-1135G7-class host)
+
+### Kernel A/B (`llama-bench` tg250, pp512 warmup, t4, 5 reps/arm, `CNE_STREAM=0`)
+
+| `CNE_KERNELS` | tg250 tok/s | notes |
+|---|---|---|
+| **1** (on) | **14.79 ± 0.23** | fused MoE q4/q6 GEMV |
+| 0 (off) | 12.66 ± 0.11 | stock llama path |
+| **delta** | **+16.8%** | gate: ≥ +5% (same bar as LFM2-24B) |
+
+Graph census (`cne_graph_census`): MoE matmul **~48%** of instrumented wall
+(q4 gate/up **31.6%**, q6 down **16.7%**); shortconv **17.6%**; embed/output q8_0
+**18.1%** (stock path).
+
+```sh
+./bench/scripts/lfm2.5/tg250-kernel-ab.sh
+# → bench/results/lfm25-tg250-kernels.tsv
+```
 
 ### Smoke (64 generated tokens, `cne_bench`)
 
 | profile | RSS (HWM) | tok/s | notes |
 |---|---|---|---|
-| mmap-dense, stream off, ctx 2048, t4 | **~4.94 GiB** | **~18** | default velocity path (≥ 6 GiB hosts) |
+| mmap-dense, stream off, ctx 2048, t4 | **~4.96 GiB** | **~12–15** | `llama-bench` tg250 **14.79**; `cne_bench` ~12 @ 250 tok |
 | **dense anon, stream off, ctx 1024** | **~2.9 GiB peak** | **~12** | **4 GiB target** — mmap drop + per-step expert trim |
 | dense anon, stream on, 3 GiB cache | ~3.8 GiB peak | ~7.6 | 90% hit-rate @ 64 tok |
 | stream on, 1 GiB expert cache (mmap dense) | ~6.2 GiB | ~1.9 | legacy — do not use for 4 GiB |

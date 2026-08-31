@@ -210,8 +210,16 @@ AtomicChat UD-Q4_K_XL, no MTP. Full profile:
 **t4 7.84** · t6 7.75 · t8 **3.00** (avoid). **Lane sweep** (t4): lanes 1 8.69 ·
 **2 9.06** · 4 8.99 · 8 9.00.
 
-**Memory harness:** `bench/scripts/lfm2.5/memory-profile.sh` →
-`bench/results/lfm25-memory.tsv`.
+**Kernel A/B** (`llama-bench` tg250, t4, pp512, 5 reps, `CNE_STREAM=0`):
+
+| `CNE_KERNELS` | tg250 tok/s |
+|---|---|
+| **1** | **14.79 ± 0.23** |
+| 0 | 12.66 ± 0.11 |
+| delta | **+16.8%** |
+
+Harness: `./bench/scripts/lfm2.5/tg250-kernel-ab.sh` ·
+`./bench/scripts/lfm2.5/memory-profile.sh` → `bench/results/lfm25-*.tsv`.
 
 ### Reproduce
 

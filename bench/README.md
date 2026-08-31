@@ -62,6 +62,7 @@ See [docs/BENCHMARKS.md](../docs/BENCHMARKS.md) and
 
 | Script | What it measures |
 |---|---|
+| `scripts/lfm2.5/tg250-kernel-ab.sh` | **Canonical** kernel A/B: tg250, pp512, 5 reps/arm |
 | `scripts/lfm2.5/memory-profile.sh` | RSS (VmHWM), tok/s, hit-rate across mmap / anon / stream profiles |
 
 ```sh

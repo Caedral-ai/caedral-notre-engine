@@ -221,7 +221,7 @@ Recommended profiles:
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
 | LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server |
-| LFM2.5-8B-A1B | 8.5B / ~1.5B | **4 GiB:** anon, stream off, t4, ctx 1024 (~11 tok/s) · **16 GiB:** mmap, t4, ctx 2048 (~12 tok/s) | AtomicChat UD-Q4_K_XL; **docs/models/lfm2.5-8b-a1b.md** |
+| LFM2.5-8B-A1B | 8.5B / ~1.5B | **4 GiB:** anon, stream off, t4, ctx 1024 · **16 GiB:** mmap, t4, ctx 2048 (**tg250 ~14.8 tok/s**) | AtomicChat UD-Q4_K_XL; **+16.8% kernels**; **docs/models/lfm2.5-8b-a1b.md** |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
