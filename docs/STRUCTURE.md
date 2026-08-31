@@ -88,7 +88,7 @@ Velocity microbenches live under `bench/`, not `tools/`.
 | `boot/` | Runtime boot sequence (synthetic + optional live model) |
 | `session/` | Session KV reuse (`session_lcp`, `session_kv_live`, `session_bigctx_live`, `session_tenant`) |
 | `api/` | API auth helpers (`api_unit`) |
-| `server/` | HTTP E2E (`server_e2e_live`, `server_api_live`, `server_gateway_live`, …) |
+| `server/` | HTTP E2E (`server_e2e_live`, `server_api_live`, `server_gateway_live`, `server_gateway_policy_live`, …) |
 | `perplexity/` | PL drift-gate unit tests (`drift_gate.py`) |
 
 Live tests are opt-in: they skip when the GGUF from the JSON config is

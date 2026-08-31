@@ -22,6 +22,7 @@ Live tests read env and runtime settings from JSON instead of long `ctest`
 | `server_api_live` | `server_api_live.json` | API mode: auth, `chat_id`, per-user sessions |
 | `server_api_per_user_live` | `server_api_per_user_live.json` | API mode: `session_max_per_user` eviction (fails fast on boot errors) |
 | `server_gateway_live` | `server_gateway_live.json` | API-key gateway → CNE: chat, KV reuse |
+| `server_gateway_policy_live` | `server_gateway_policy_live.json` | Gateway policy: thinking 403, `max_tokens` cap |
 | `server_e2e_qwen_live` | `server_e2e_qwen_live.json` | Qwen3.6: same HTTP path; `CNE_MTP=0`, thinking off |
 | `server_e2e_lfm25_live` | `server_e2e_lfm25_live.json` | LFM2.5-8B-A1B: HTTP + session KV; thinking off |
 | `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating `conversation_id`s (no auth) |
@@ -66,7 +67,7 @@ From the **build** directory (not the repo root):
 
 ```sh
 # HTTP + API + gateway (slow — needs GGUF; gateway test needs Python venv)
-ctest --test-dir build -R 'server_e2e_live|server_api_live|server_api_per_user_live|server_gateway_live' --output-on-failure
+ctest --test-dir build -R 'server_e2e_live|server_api_live|server_api_per_user_live|server_gateway_live|server_gateway_policy_live' --output-on-failure
 
 # Qwen models (if downloaded)
 ctest --test-dir build -R 'server_e2e_qwen_live|server_e2e_lfm25_live|session_kv_qwen_live' --output-on-failure
@@ -120,19 +121,27 @@ decode (`docs/FEATURES.md` §5).
 | Label | tests | typical time |
 |---|---|---|
 | *(none)* | `session_lcp`, `session_tenant`, `api_unit`, `gateway_unit`, `kv_budget`, … | < 1 s |
-| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_e2e_lfm25_live`, `server_api_live`, `server_api_per_user_live`, `server_gateway_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – few min |
+| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_e2e_lfm25_live`, `server_api_live`, `server_api_per_user_live`, `server_gateway_live`, `server_gateway_policy_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – few min |
 
 `session_kv_live` loads the full model but finishes in ~20–40 s on LFM2.
 `server_api_per_user_live` ~30 s (LFM2). Qwen HTTP E2E ~60–80 s each.
 
-## Gateway live test
+## Gateway live tests
 
 `server_gateway_live` forks `cne_server` + `cne_gateway`, checks 401 without a
-client key, runs two-turn chat with KV reuse. Requires:
+client key, runs two-turn chat with KV reuse.
+
+`server_gateway_policy_live` uses the same stack with `CNE_GATEWAY_ALLOW_THINKING=0`
+and `CNE_GATEWAY_MAX_TOKENS=8` while `CNE_THINK=1` on the engine. It checks
+`/health` policy fields, **403** when a client sends `enable_thinking: true`, and
+that completions stay within the token cap (explicit `max_tokens` clamp and
+default when omitted).
+
+Requires:
 
 ```sh
 cd gateway && python -m venv .venv && .venv/bin/pip install -r requirements.txt
-ctest --test-dir build -R server_gateway_live --output-on-failure
+ctest --test-dir build -R 'server_gateway_live|server_gateway_policy_live' --output-on-failure
 ```
 
 ## Server E2E details

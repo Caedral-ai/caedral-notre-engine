@@ -204,6 +204,7 @@ ctest --test-dir build -R gateway_unit --output-on-failure
 
 ```sh
 ctest --test-dir build -R server_gateway_live --output-on-failure
+ctest --test-dir build -R server_gateway_policy_live --output-on-failure
 ```
 
 ## 6. Production notes
