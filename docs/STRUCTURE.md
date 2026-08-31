@@ -55,11 +55,13 @@ Python FastAPI proxy for public multi-user APIs (**docs/GATEWAY.md**):
 |---|---|
 | `cne_gateway/main.py` | Routes, health, lifespan |
 | `cne_gateway/auth.py` | Client API key load + per-user RPM |
+| `cne_gateway/policy.py` | Chat policy: `allow_thinking`, `max_tokens_per_request` |
 | `cne_gateway/proxy.py` | Forward to `cne_server` with internal key + `X-User-Id` |
 | `cne_gateway/config.py` | `gateway.json` + env |
 | `gateway.json.example` | Operator config template |
 | `api_keys.example.txt` | Client key file format |
-| `tests/test_gateway.py` | Unit tests (mocked upstream) |
+| `tests/test_gateway.py` | Unit tests (auth, proxy, config) |
+| `tests/test_policy.py` | Unit tests (chat policy) |
 
 Not built by CMake; run via `tools/scripts/run-gateway.sh` or
 `python -m cne_gateway`.

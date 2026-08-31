@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .auth import AuthError, RateLimiter, authenticate_api_key, load_api_keys
 from .config import Settings, load_settings
+from .policy import PolicyError, apply_chat_policy
 from .proxy import extract_chat_id, parse_json_body, proxy_get, proxy_json, proxy_stream
 
 _bearer = HTTPBearer(auto_error=False)
@@ -65,6 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "auth": "api_key",
                 "upstream": cfg.upstream,
                 "client_keys": len(client_keys),
+                "allow_thinking": cfg.allow_thinking,
+                "max_tokens_per_request": cfg.max_tokens_per_request,
             },
         }
         try:
@@ -93,6 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body = parse_json_body(raw)
         if "messages" not in body or not isinstance(body["messages"], list):
             raise HTTPException(status_code=400, detail="'messages' must be an array")
+        try:
+            body = apply_chat_policy(body, cfg)
+        except PolicyError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
         chat_id = extract_chat_id(request, body)
         if body.get("stream"):
             return await proxy_stream(

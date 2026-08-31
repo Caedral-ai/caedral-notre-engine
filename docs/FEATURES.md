@@ -414,6 +414,9 @@ for the two-tier key model (internal vs client keys).
 `127.0.0.1`. Clients never call `cne_server` directly. Gateway docs:
 **docs/GATEWAY.md** · serving architecture: **docs/SERVING.md**.
 
+Gateway chat policy (`gateway.json`): `allow_thinking` (block client thinking
+override), `max_tokens_per_request` (per-answer token cap).
+
 Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
 tail; logs `[session] reused=N prefilled=M`. Different users can share one

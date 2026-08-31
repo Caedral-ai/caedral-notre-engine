@@ -4,5 +4,7 @@
   "upstream": "http://127.0.0.1:8080",
   "internal_api_key": "same-as-cne_server-CNE_API_KEY",
   "api_keys_file": "api_keys.local.txt",
-  "rpm_per_user": 120
+  "rpm_per_user": 120,
+  "allow_thinking": false,
+  "max_tokens_per_request": 512
 }

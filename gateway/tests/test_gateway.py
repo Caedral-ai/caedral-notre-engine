@@ -8,19 +8,10 @@ import respx
 from fastapi.testclient import TestClient
 
 from cne_gateway.auth import authenticate_api_key, load_api_keys
-from cne_gateway.config import Settings, load_settings
+from cne_gateway.config import load_settings
 from cne_gateway.main import create_app
 
-
-def make_settings(keys_file: Path) -> Settings:
-    return Settings(
-        host="127.0.0.1",
-        port=8090,
-        upstream="http://engine.test",
-        internal_api_key="internal-key",
-        api_keys_file=keys_file,
-        rpm_per_user=1000,
-    )
+from tests.helpers import make_settings
 
 
 def test_api_key_maps_to_user(tmp_path: Path) -> None:
@@ -97,6 +88,8 @@ def test_load_settings_from_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert s.internal_api_key == "secret-from-file"
     assert s.api_keys_file == keys_file.resolve()
     assert s.rpm_per_user == 42
+    assert s.allow_thinking is False
+    assert s.max_tokens_per_request == 0
 
     monkeypatch.setenv("CNE_GATEWAY_PORT", "7777")
     s2 = load_settings()

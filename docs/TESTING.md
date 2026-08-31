@@ -107,6 +107,7 @@ Multi-user API and gateway: **docs/SERVING.md**, **docs/GATEWAY.md**.
 
 ```sh
 cd gateway && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+PYTHONPATH=. pytest tests -q          # test_gateway.py + test_policy.py
 ctest --test-dir build -R gateway_unit --output-on-failure
 ```
 

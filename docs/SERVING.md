@@ -137,7 +137,8 @@ key and `X-User-Id` from the key mapping.
 | **Authentication** | `cne_gateway` — client API keys (`Authorization: Bearer`) |
 | **Stable id namespace** | Gateway → CNE `chat_id` as `{user}:{chat}` |
 | **Per-user session limit** | `cne_server` — `session_max_per_user` |
-| **Rate limits** | Gateway `CNE_GATEWAY_RPM` + nginx |
+| **Rate limits** | Gateway `rpm_per_user` / `CNE_GATEWAY_RPM` + nginx |
+| **Thinking + answer token cap** | Gateway `allow_thinking`, `max_tokens_per_request` — **docs/GATEWAY.md** |
 | **Context trim** | `cne_server` — per-lane auto-trim |
 | **TLS + bind** | CNE on `127.0.0.1`; TLS in front of gateway |
 | **Observability** | `GET /health` on gateway and CNE |

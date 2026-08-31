@@ -16,6 +16,8 @@ class Settings:
     internal_api_key: str
     api_keys_file: Path
     rpm_per_user: int
+    allow_thinking: bool
+    max_tokens_per_request: int
 
 
 def gateway_root() -> Path:
@@ -96,6 +98,18 @@ def _pick_int(file_cfg: dict[str, Any], json_key: str, env_name: str, default: i
     return default
 
 
+def _pick_bool(file_cfg: dict[str, Any], json_key: str, env_name: str, default: bool) -> bool:
+    raw = os.environ.get(env_name)
+    if raw is not None and raw != "":
+        return raw not in ("0", "false", "False", "off", "OFF")
+    val = file_cfg.get(json_key)
+    if val is not None:
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("1", "true", "on", "yes")
+    return default
+
+
 def load_settings() -> Settings:
     cfg_path = _resolve_config_path()
     file_cfg = _load_json_config(cfg_path)
@@ -119,6 +133,12 @@ def load_settings() -> Settings:
         internal_api_key=internal_api_key,
         api_keys_file=_resolve_api_keys_file(keys_raw),
         rpm_per_user=_pick_int(file_cfg, "rpm_per_user", "CNE_GATEWAY_RPM", 120),
+        allow_thinking=_pick_bool(
+            file_cfg, "allow_thinking", "CNE_GATEWAY_ALLOW_THINKING", False
+        ),
+        max_tokens_per_request=_pick_int(
+            file_cfg, "max_tokens_per_request", "CNE_GATEWAY_MAX_TOKENS", 0
+        ),
     )
 
     if cfg_path:
@@ -128,7 +148,9 @@ def load_settings() -> Settings:
         )
         print(
             f"[gateway] host={settings.host} port={settings.port} "
-            f"upstream={settings.upstream} keys={settings.api_keys_file}",
+            f"upstream={settings.upstream} keys={settings.api_keys_file} "
+            f"allow_thinking={settings.allow_thinking} "
+            f"max_tokens={settings.max_tokens_per_request or 'unlimited'}",
             file=sys.stderr,
         )
 

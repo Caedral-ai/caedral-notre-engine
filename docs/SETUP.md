@@ -245,11 +245,14 @@ cp gateway/api_keys.example.txt gateway/api_keys.local.txt
 |---|---|
 | `models/server.json` | Engine knobs + `api_mode` |
 | `models/api_keys.txt` | **Internal** key (gateway → engine only) |
-| `gateway/gateway.json` | Gateway listen port, upstream, internal key |
+| `gateway/gateway.json` | Gateway listen port, upstream, internal key, **chat policy** (`allow_thinking`, `max_tokens_per_request`) |
 | `gateway/api_keys.local.txt` | **Client** keys (`<key> <user_id>` per line) |
 
 Clients call `http://<gateway>:8090/v1/...` with
 `Authorization: Bearer <client-api-key>` and `X-Chat-Id` (or JSON `chat_id`).
+
+Chat policy (thinking block, per-answer token cap) is configured in
+`gateway/gateway.json` — see **docs/GATEWAY.md** §2 (Chat policy).
 
 Install gateway deps once: `cd gateway && python -m venv .venv && pip install -r requirements.txt`.
 
