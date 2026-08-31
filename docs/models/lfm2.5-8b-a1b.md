@@ -65,7 +65,8 @@ if you ever enable `stream` on larger hosts; on 16 GiB machines **mmap-dense**
 | `server_e2e_lfm25_live` | **PASS** — chat + session KV reuse |
 
 Custom CPU kernels (`CNE_KERNELS=1`): same top-4 MoE fast path as LFM2-24B-A2B.
-Run `cne_identity_gate` after any quant swap before velocity claims.
+Run `cne_identity_gate` after any quant swap before velocity claims. Internal
+plan (streaming + kernels): `internal-docs/plans/LFM2.5-8B-A1B_STREAM_KERNELS.md`.
 
 ## 5. Serving profile
 
