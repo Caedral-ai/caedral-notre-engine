@@ -4,6 +4,14 @@ API-key-authenticated public API in front of `cne_server`. Each user receives a
 client API key out-of-band. There is no login endpoint. End users never see the
 internal CNE API key or set `X-User-Id` themselves.
 
+**Scope:** `cne_gateway` is a **minimal reference proxy** — a single-process
+FastAPI app with file-based API keys and in-memory rate limiting. It is enough
+for development, demos, and small private deployments. For **production**, you
+will likely want a more robust edge layer (TLS termination, HA, centralized
+auth/key management, quotas or billing, WAF, structured logging and metrics, and
+horizontal scaling in front of multiple engine instances). Treat this gateway as a
+starting point; replace or wrap it as traffic and compliance needs grow.
+
 ```
 Client (API key)  →  gateway :8090  →  cne_server :8080 (API mode, localhost)
 ```
@@ -209,6 +217,9 @@ ctest --test-dir build -R server_gateway_policy_live --output-on-failure
 
 ## 6. Production notes
 
+- **`cne_gateway` is not a production-grade API platform** — it is a thin proxy to
+  get multi-user serving working quickly. Plan to move TLS, auth, quotas, and
+  observability into nginx/Caddy/Kong/your own service mesh as requirements grow.
 - Issue and rotate client keys out-of-band; revoke by removing a line from the keys file.
 - Never expose `cne_server` on a public interface; only the gateway.
 - Rotate `CNE_INTERNAL_API_KEY` on compromise (re-issue all client keys if needed).

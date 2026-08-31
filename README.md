@@ -105,7 +105,7 @@ Users state intent; the engine resolves settings:
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
 | Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
 | OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; API mode (`chat_id`, per-user caps) |
-| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | Public API: client API keys, rate limits, proxies to `cne_server` on localhost — **docs/GATEWAY.md** |
+| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | **Minimal** reference proxy: client API keys, RPM, chat policy → `cne_server` on localhost. Fine for dev/small deploys; production usually needs a stronger edge — **docs/GATEWAY.md** |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -289,6 +289,12 @@ Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING
 
 For a **public** API, bind `cne_server` to `127.0.0.1` only and put
 **`cne_gateway`** in front. Users get a **client API key** (no login/JWT).
+
+`cne_gateway` is intentionally **simple** (single process, file-based keys,
+in-memory RPM). It is a reference path to multi-user serving, not a full
+production API platform — see **docs/GATEWAY.md** for scope and what to add at
+scale (TLS, HA, centralized auth, billing, metrics, and a load-balanced engine
+tier).
 
 ```sh
 # 1. Setup with API mode (writes models/server.json + models/api_keys.txt)

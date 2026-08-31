@@ -190,7 +190,8 @@ this repo without waiting on engine work.
 ### Phase 0 — Operate safely (**API** + gateway, now)
 
 - [x] API key auth on `cne_server` (`CNE_API_MODE`, `api_keys_file`, …)
-- [x] **`cne_gateway`** — client API keys, RPM, OpenAI proxy (**docs/GATEWAY.md**)
+- [x] **`cne_gateway`** — minimal reference proxy: client API keys, RPM, chat
+  policy, OpenAI proxy (**docs/GATEWAY.md**; replace/wrap for production scale)
 - [x] `X-User-Id` + server-owned `chat_id` → `conversation_id`
 - [x] Per-user session cap (`session_max_per_user` / `CNE_SESSION_MAX_PER_USER`)
 - [x] Message trim to per-lane context before generate
