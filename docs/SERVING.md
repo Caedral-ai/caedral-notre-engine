@@ -19,7 +19,7 @@ For build, config, and knobs see **docs/SETUP.md** and **docs/FEATURES.md**
 | Request queue (one generation at a time) | **Done** (`/health` → `queue.*`) |
 | Client disconnect stops generation | **Done** |
 | Per-request wall cap (`max_req_s` / `CNE_MAX_REQ_S`) | **Done** |
-| API keys, per-user quotas, fair eviction | **Not in server** — your API layer |
+| API keys, per-user quotas, fair eviction | **Engine (API mode)** + **gateway** — see below |
 | Dynamic context per chat (use what you need) | **Not supported** — fixed lanes |
 | Auto-truncate / summarize old turns | **Not in server** — client or API layer |
 | Parallel decode across users | **Not supported** — serial queue |
@@ -80,14 +80,19 @@ Example: `ctx: 4096`, `session_max: 2` → **2048 tokens per lane**, always.
 must send a `messages` array that fits the lane. The server tokenizes whatever
 it receives.
 
-### No cross-user isolation (today)
+### Isolation with API mode + gateway
 
-`conversation_id` is an **unauthenticated global string**. Any client that
-guesses another id could attach to that KV (low practical risk) or collide on
-names. One user opening many chats can evict **any** least-recently-used slot,
-including another user’s chat.
+With **`api_mode: true`** on `cne_server` and the **gateway** in front:
 
-There is no `user_id`, per-tenant pool, or “reserved slots” in v1.
+- Clients use **client API keys** at the gateway; the **internal key** never
+  leaves localhost.
+- The gateway maps each key → `user_id` and sends `X-User-Id` + `chat_id`.
+- CNE builds `conversation_id` as `{user}:{chat}` and rejects cross-user access.
+- **`session_max_per_user`** evicts LRU chats **within** a user before touching
+  another user's slots.
+
+Without API mode (direct `cne_server`), `conversation_id` is still an
+unauthenticated global string — use the gateway for public multi-user hosting.
 
 ### Serial decode (not batched multi-user)
 
@@ -181,14 +186,16 @@ Run `cne_setup -y` and check `models/server.json` for suggested `ctx` and
 Ordered for multi-tenant API serving. Items marked **API** can be done outside
 this repo without waiting on engine work.
 
-### Phase 0 — Operate safely (**API**, now)
+### Phase 0 — Operate safely (**API** + gateway, now)
 
-- [x] API key auth (`CNE_API_MODE`, `CNE_API_KEY` / `CNE_API_KEYS` / `api_keys_file`)
+- [x] API key auth on `cne_server` (`CNE_API_MODE`, `api_keys_file`, …)
+- [x] **`cne_gateway`** — client API keys, RPM, OpenAI proxy (**docs/GATEWAY.md**)
 - [x] `X-User-Id` + server-owned `chat_id` → `conversation_id`
 - [x] Per-user session cap (`session_max_per_user` / `CNE_SESSION_MAX_PER_USER`)
 - [x] Message trim to per-lane context before generate
 - [x] `/health` exposes `api.*`, `n_ctx_per_seq`, queue + sessions
 - [x] Example nginx TLS/rate-limit config: `tools/nginx/cne_api.conf.example`
+- [x] `cne_setup` writes API mode fields + internal keys file
 - [ ] TLS termination in production (deploy nginx/Caddy — see example config)
 - [ ] Monitor `/health` queue depth in your orchestrator (poll `queue.waiting`)
 
@@ -197,8 +204,9 @@ this repo without waiting on engine work.
 - [x] `X-User-Id` on authenticated requests
 - [x] Evict LRU **within user** before global eviction (`SessionStore`)
 - [x] Reject `conversation_id` not owned by authenticated user
-- [ ] Config: separate global lane count vs `session_max_per_user` docs in setup
-- [ ] Tests: `session_tenant`, `server_api_live` (see **docs/TESTING.md**)
+- [x] Config: `cne_setup` documents `session_max` vs `session_max_per_user`
+- [x] Tests: `session_tenant`, `server_api_live`, `server_api_per_user_live`,
+  `server_gateway_live` (**docs/TESTING.md**)
 
 ### Phase 2 — Fairness and limits (server + API)
 
@@ -220,22 +228,40 @@ this repo without waiting on engine work.
 - [ ] Multiple engine workers (separate processes) behind load balancer — ops heavy
 
 Phases 1–2 are the minimum to call multi-user API serving **fair**. Phase 0
-can go live today with a proxy.
+can go live today with **`cne_gateway`** + API-mode `cne_server`.
 
 ---
 
 ## 6. Request contract (reference)
 
-### Multi-turn chat (recommended for API)
+### Multi-turn chat via gateway (recommended for public API)
+
+```http
+POST http://gateway:8090/v1/chat/completions
+Authorization: Bearer <client-api-key>
+X-Chat-Id: support-42
+Content-Type: application/json
+
+{
+  "messages": [{"role": "user", "content": "hello"}],
+  "max_tokens": 64
+}
+```
+
+The gateway forwards to `cne_server` with the internal key and `X-User-Id` from
+the key mapping. Use `chat_id` in JSON instead of `X-Chat-Id` if you prefer.
+
+### Multi-turn chat (direct `cne_server`, API mode or legacy)
 
 ```http
 POST /v1/chat/completions
 Content-Type: application/json
-X-Conversation-Id: user-42:chat-9
+Authorization: Bearer <api-key>
+X-User-Id: alice
+X-Chat-Id: chat-9
 
 {
   "messages": [
-    {"role": "system", "content": "..."},
     {"role": "user", "content": "..."},
     {"role": "assistant", "content": "..."},
     {"role": "user", "content": "follow-up"}
@@ -245,7 +271,8 @@ X-Conversation-Id: user-42:chat-9
 }
 ```
 
-Or embed `"conversation_id": "user-42:chat-9"` in the JSON body.
+Legacy (no API mode): use `conversation_id` or `X-Conversation-Id` instead of
+`chat_id` / `X-User-Id`.
 
 ### Reset a thread
 
@@ -269,21 +296,27 @@ curl -s http://127.0.0.1:8080/health | jq '{queue, sessions, n_ctx}'
 ## 7. FAQ
 
 **Can one user steal another’s conversation?**  
-Today, only if they guess the `conversation_id`. Use server-assigned ids and
-auth (Phase 0–1).
+With API mode + gateway: no across users (server checks `user_id` owns
+`conversation_id`). Without API mode: only if they guess the id — use the
+gateway for public APIs.
 
 **Why did my long chat lose history?**  
-Either LRU evicted the whole conversation (too many chats for `session_max`),
-or the client sent a longer prompt than the per-lane cap. Not automatic
-compression.
+Either LRU evicted the whole conversation (`session_max` or
+`session_max_per_user`), or the client sent more tokens than the per-lane cap.
+The server trims oldest non-system messages in API mode but does not summarize.
 
 **Can I run two users at full speed simultaneously?**  
 No on one `cne_server` process — one decode at a time. Scale with multiple
-instances + load balancer for throughput (each instance = one model copy).
+instances behind a load balancer (each instance = one model copy; one gateway
+or shared client-key store per deployment).
 
 **MTP for API users?**  
-Only for stateless, single-shot requests without `conversation_id`. Chat APIs
-should use `mtp: 0`.
+Only for stateless, single-shot requests without `chat_id` / `conversation_id`.
+Chat APIs should use `mtp: 0`.
+
+**Where do client API keys live?**  
+`gateway/api_keys.local.txt` (or env). Internal engine key:
+`models/api_keys.txt` from `cne_setup`. See **docs/GATEWAY.md**.
 
 ---
 
@@ -291,7 +324,8 @@ should use `mtp: 0`.
 
 | Doc | Contents |
 |---|---|
-| **docs/SETUP.md** | `cne_setup`, `server.json`, `session_max` in config |
+| **docs/GATEWAY.md** | `cne_gateway` setup, client vs internal keys, `gateway.json` |
+| **docs/SETUP.md** | `cne_setup`, `server.json`, API mode fields |
 | **docs/FEATURES.md** §11 | Endpoints, env knobs, session vs MTP |
-| **docs/TESTING.md** | `server_e2e_live`, `session_kv_live` |
+| **docs/TESTING.md** | Live E2E matrix (HTTP, API, gateway, Qwen) |
 | **README.md** | Product overview and quick start |

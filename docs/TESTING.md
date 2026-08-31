@@ -64,10 +64,13 @@ the default config path.
 From the **build** directory (not the repo root):
 
 ```sh
-# all live tests (includes slow — several minutes on LFM2)
-ctest --test-dir build -R 'server_e2e_live|session_kv_live|session_bigctx_live' --output-on-failure
+# HTTP + API + gateway (slow — needs GGUF; gateway test needs Python venv)
+ctest --test-dir build -R 'server_e2e_live|server_api_live|server_api_per_user_live|server_gateway_live' --output-on-failure
 
-# fast subset only (unit tests + session_lcp; no GGUF)
+# Qwen models (if downloaded)
+ctest --test-dir build -R 'server_e2e_qwen_live|session_kv_qwen_live' --output-on-failure
+
+# fast subset only (unit tests; no GGUF)
 ctest --test-dir build -LE slow --output-on-failure
 
 # one test
@@ -97,8 +100,14 @@ Qwen3.6 reference model (~21 GiB):
 ctest --test-dir build -R server_e2e_qwen_live --output-on-failure
 ```
 
-Multi-user API limits (global LRU, no per-tenant isolation) and the serving
-roadmap: **docs/SERVING.md**.
+Multi-user API and gateway: **docs/SERVING.md**, **docs/GATEWAY.md**.
+
+**Gateway unit tests** (no model):
+
+```sh
+cd gateway && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+ctest --test-dir build -R gateway_unit --output-on-failure
+```
 
 **Qwen + sessions:** MTP and `conversation_id` are mutually exclusive — Qwen
 E2E configs set `CNE_MTP=0`. Use separate MTP benchmarks for speculative
@@ -109,9 +118,20 @@ decode (`docs/FEATURES.md` §5).
 | Label | tests | typical time |
 |---|---|---|
 | *(none)* | `session_lcp`, `session_tenant`, `api_unit`, `gateway_unit`, `kv_budget`, … | < 1 s |
-| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_api_live`, `server_gateway_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – ~15 min |
+| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_api_live`, `server_api_per_user_live`, `server_gateway_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – few min |
 
-`session_kv_live` loads the full model but finishes in ~20–40 s.
+`session_kv_live` loads the full model but finishes in ~20–40 s on LFM2.
+`server_api_per_user_live` ~30 s (LFM2). Qwen HTTP E2E ~60–80 s each.
+
+## Gateway live test
+
+`server_gateway_live` forks `cne_server` + `cne_gateway`, checks 401 without a
+client key, runs two-turn chat with KV reuse. Requires:
+
+```sh
+cd gateway && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+ctest --test-dir build -R server_gateway_live --output-on-failure
+```
 
 ## Server E2E details
 

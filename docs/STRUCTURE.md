@@ -47,13 +47,30 @@ Integration layer between `cne_core` and pinned llama.cpp:
 
 CMake target: `cne_runtime` (static library).
 
+## gateway/
+
+Python FastAPI proxy for public multi-user APIs (**docs/GATEWAY.md**):
+
+| Path | Responsibility |
+|---|---|
+| `cne_gateway/main.py` | Routes, health, lifespan |
+| `cne_gateway/auth.py` | Client API key load + per-user RPM |
+| `cne_gateway/proxy.py` | Forward to `cne_server` with internal key + `X-User-Id` |
+| `cne_gateway/config.py` | `gateway.json` + env |
+| `gateway.json.example` | Operator config template |
+| `api_keys.example.txt` | Client key file format |
+| `tests/test_gateway.py` | Unit tests (mocked upstream) |
+
+Not built by CMake; run via `tools/scripts/run-gateway.sh` or
+`python -m cne_gateway`.
+
 ## tools/
 
 | Kind | Location |
 |---|---|
 | Shipped binaries | Built by CMake: `cne_prepare`, `cne_bench`, `cne_identity_gate` |
 | Dev probes | `cne_graph_probe`, `cne_graph_census`, `cne_rebind_probe`, … |
-| Operator scripts | `tools/scripts/` — model download, canary, perplexity helpers |
+| Operator scripts | `tools/scripts/` — model download, canary, **`run-gateway.sh`**, … |
 | Quality harness | `drift_gate.py` (used by canary + `tests/perplexity/`) |
 
 Velocity microbenches live under `bench/`, not `tools/`.
@@ -67,8 +84,9 @@ Velocity microbenches live under `bench/`, not `tools/`.
 | `memory/` | Budget and regime logic |
 | `features/streaming/` | Slice cache and I/O |
 | `boot/` | Runtime boot sequence (synthetic + optional live model) |
-| `session/` | Session KV reuse (`session_lcp`, `session_kv_live`, `session_bigctx_live`) |
-| `server/` | HTTP E2E against forked `cne_server` (`server_e2e_live`) |
+| `session/` | Session KV reuse (`session_lcp`, `session_kv_live`, `session_bigctx_live`, `session_tenant`) |
+| `api/` | API auth helpers (`api_unit`) |
+| `server/` | HTTP E2E (`server_e2e_live`, `server_api_live`, `server_gateway_live`, …) |
 | `perplexity/` | PL drift-gate unit tests (`drift_gate.py`) |
 
 Live tests are opt-in: they skip when the GGUF from the JSON config is

@@ -392,7 +392,12 @@ Server-specific knobs:
 | `CNE_SESSION_MAX_PER_USER` | N | Max parked chats per user (default 2 in API mode) |
 
 Config file keys: `api_mode`, `api_keys` (array), `api_keys_file`, `api_rpm`,
-`session_max_per_user`. See `tools/api_keys.example.txt`.
+`session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
+for the two-tier key model (internal vs client keys).
+
+**Public API:** run **`cne_gateway`** in front of API-mode `cne_server` on
+`127.0.0.1`. Clients never call `cne_server` directly. Gateway docs:
+**docs/GATEWAY.md** · serving architecture: **docs/SERVING.md**.
 
 Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt

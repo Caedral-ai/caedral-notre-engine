@@ -207,26 +207,57 @@ curl http://localhost:8080/v1/chat/completions \
     -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
 ```
 
-Any OpenAI-compatible client works: point Open WebUI at the server as an
-"OpenAI API" connection, or configure opencode/n8n with base URL
+Any OpenAI-compatible client works locally: point Open WebUI at
 `http://127.0.0.1:8080/v1`.
 
-For **multiple users on a public API**, do not expose `cne_server` directly —
-use auth, rate limits, and server-assigned `conversation_id` in a proxy layer.
-Open WebUI usually does not send `conversation_id`, so KV reuse may not apply
-unless you add a thin adapter. Full multi-tenant guidance: **docs/SERVING.md**.
+For **multiple users on a public API**, do **not** expose `cne_server` on the
+internet. Use **`cne_gateway`** (client API keys) in front of API-mode
+`cne_server` on `127.0.0.1` — **docs/GATEWAY.md** and **docs/SERVING.md**.
+
+## 6b. API gateway (Path B)
+
+After `cne_setup` with API mode enabled (`api_mode`, `session_max_per_user`,
+`api_rpm`, `api_keys_file` in `models/server.json`):
+
+```sh
+# engine (reads models/server.json; bind 127.0.0.1 in production)
+./build/server/cne_server
+
+# gateway — copy examples, edit keys, then:
+cp gateway/gateway.json.example gateway/gateway.json
+cp gateway/api_keys.example.txt gateway/api_keys.local.txt
+./tools/scripts/run-gateway.sh
+```
+
+| File | Purpose |
+|---|---|
+| `models/server.json` | Engine knobs + `api_mode` |
+| `models/api_keys.txt` | **Internal** key (gateway → engine only) |
+| `gateway/gateway.json` | Gateway listen port, upstream, internal key |
+| `gateway/api_keys.local.txt` | **Client** keys (`<key> <user_id>` per line) |
+
+Clients call `http://<gateway>:8090/v1/...` with
+`Authorization: Bearer <client-api-key>` and `X-Chat-Id` (or JSON `chat_id`).
+
+Install gateway deps once: `cd gateway && python -m venv .venv && pip install -r requirements.txt`.
 
 ## 7. Automated live tests
 
-With the LFM2 artifact on disk, run the HTTP end-to-end check:
+With the LFM2 artifact on disk:
 
 ```sh
 ctest --test-dir build -R server_e2e_live --output-on-failure
+ctest --test-dir build -R 'server_api_live|server_api_per_user_live' --output-on-failure
 ```
 
-Edit env knobs in `tests/e2e/server_e2e_live.json` (ctx, cache, sessions)
-instead of exporting a long list of `CNE_*` variables. Full matrix of live
-tests, custom configs, and slow-test filtering: **docs/TESTING.md**.
+Gateway live test (needs `gateway/.venv` + `pip install -r requirements.txt`):
+
+```sh
+ctest --test-dir build -R server_gateway_live --output-on-failure
+```
+
+Edit env knobs in `tests/e2e/*.json` instead of exporting long `CNE_*` lists.
+Full matrix: **docs/TESTING.md**.
 
 ## 8. Troubleshooting
 

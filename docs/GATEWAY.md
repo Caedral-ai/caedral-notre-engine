@@ -10,7 +10,10 @@ Client (API key)  →  gateway :8090  →  cne_server :8080 (API mode, localhost
 
 ## 1. Prerequisites
 
-1. Build and configure `cne_server` with **API mode** on `127.0.0.1:8080`:
+1. Build and configure `cne_server` with **API mode** on `127.0.0.1:8080`.
+
+Easiest path: run `./build/cli/cne_setup` (enable API mode) and
+`./build/server/cne_server` — see **docs/SETUP.md** §6b. Manual env example:
 
 ```sh
 export CNE_API_MODE=1

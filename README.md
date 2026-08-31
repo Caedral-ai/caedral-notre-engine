@@ -104,7 +104,8 @@ Users state intent; the engine resolves settings:
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
 | Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
-| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; serial multi-user seq lanes; live HTTP E2E test |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; API mode (`chat_id`, per-user caps) |
+| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | Path B public API: client API keys, rate limits, proxies to `cne_server` on localhost — **docs/GATEWAY.md** |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -130,25 +131,38 @@ velocity gains and reproduction commands: **[docs/BENCHMARKS.md](docs/BENCHMARKS
 
 ## Architecture
 
+**Local / single-user** — client talks to `cne_server` directly:
+
 ```
 Client (OpenAI SDK / Open WebUI / n8n)
-        │  HTTP/SSE                      (live via cne-server)
+        │  HTTP/SSE
         ▼
-    cne-server ── OpenAI-compatible API (auth/quotas: API layer — docs/SERVING.md)
+    cne_server ── OpenAI-compatible API
         ▼
-    cne-runtime ── regime classifier → feature activation
+    cne_runtime ── regime classifier → feature activation
         ▼                              ▼
   Memory manager                  Feature modules
-  budgets · regimes               streaming · speculation · precision
         ▼                              ▼
-     Expert LRU cache  ←────  O_DIRECT I/O lanes
-                     ▼
-             NVMe / Flash (GGUF shards)
+     Expert LRU cache  ←────  O_DIRECT I/O lanes → NVMe / Flash (GGUF)
 ```
 
-The runtime speaks through `cne_bench` (measurement driver) and
-`cne-server` (serving); `cne-setup` resolves hardware/model into a
-confirmed configuration for the server.
+**Public multi-user API** — do not expose `cne_server` on the internet; use the
+gateway (**docs/GATEWAY.md**, **docs/SERVING.md**):
+
+```
+Clients (Bearer API key)
+        │  HTTPS (nginx/Caddy optional)
+        ▼
+    cne_gateway :8090     client keys, RPM, maps key → user_id
+        │  internal API key + X-User-Id + chat_id
+        ▼
+    cne_server :8080      API mode, 127.0.0.1 only
+        ▼
+    (same runtime stack as above)
+```
+
+`cne_bench` (measurement) and `cne_setup` (confirmed `server.json` + optional
+API mode fields) sit beside the server; the gateway reads `gateway.json`.
 
 ## Repository layout
 
@@ -166,6 +180,7 @@ runtime/                   llama.cpp seam + demand-serving runtime (cne_runtime)
   cne_stream_cb.cpp        demand-serving runtime (fills, cache, anon dense)
   cne_stream_spec.cpp      draft-MTP generation loop
 server/                    cne_server — OpenAI-compatible HTTP/SSE endpoint
+gateway/                   cne_gateway — API-key public proxy (Path B)
 cli/                       cne_setup — first-run config (detect, suggest, confirm)
 tools/                     shipped binaries + operator scripts
   scripts/                 model download, canary, perplexity helpers
@@ -176,7 +191,7 @@ tests/                     unit and integration tests
   gguf/ memory/ features/streaming/   core library
   boot/ session/ server/   runtime + session + HTTP live checks
   perplexity/              PL drift-gate unit tests
-docs/                      FEATURES · SETUP · TESTING · BENCHMARKS · STRUCTURE · per-model notes
+docs/                      FEATURES · SETUP · SERVING · GATEWAY · TESTING · …
 third_party/llama.cpp      pinned kernel fork (branch cne/cpu-kernels; kernels in `ggml-cpu/cne/`)
 models/                    local GGUF artifacts (gitignored)
 internal-docs/             private kernel/ops research (separate git repo, gitignored)
@@ -188,7 +203,7 @@ Requirements: Linux, CMake ≥ 3.16, C++17 compiler, ~50 GB free disk for the
 reference model.
 
 ```sh
-# build (include tests + server for live E2E)
+# build (include tests + server + setup for live E2E)
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
       -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build -j
@@ -268,6 +283,40 @@ step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 **[docs/GATEWAY.md](docs/GATEWAY.md)**.
 Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING.md)**.
 
+### Multi-user API (gateway)
+
+For a **public** API, bind `cne_server` to `127.0.0.1` only and put
+**`cne_gateway`** in front. Users get a **client API key** (no login/JWT).
+
+```sh
+# 1. Setup with API mode (writes models/server.json + models/api_keys.txt)
+./build/cli/cne_setup -y
+
+# 2. Engine (localhost, API mode from server.json)
+./build/server/cne_server
+
+# 3. Gateway (separate terminal)
+cp gateway/gateway.json.example gateway/gateway.json   # set internal_api_key
+cp gateway/api_keys.example.txt gateway/api_keys.local.txt  # client keys
+./tools/scripts/run-gateway.sh
+
+# 4. Client calls the gateway (not cne_server)
+curl http://127.0.0.1:8090/v1/chat/completions \
+  -H "Authorization: Bearer <client-api-key>" \
+  -H "X-Chat-Id: my-chat" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":32}'
+```
+
+Two key tiers: **client API key** (gateway, per user) and **internal key**
+(`models/api_keys.txt` / `CNE_INTERNAL_API_KEY`, gateway → engine only).
+Full guide: **[docs/GATEWAY.md](docs/GATEWAY.md)** · architecture:
+**[docs/SERVING.md](docs/SERVING.md)**.
+
+Gateway unit tests: `cd gateway && pip install -r requirements.txt && PYTHONPATH=. pytest tests -q`.
+Live stack: `ctest --test-dir build -R server_gateway_live --output-on-failure`
+(needs GGUF + `gateway/.venv`).
+
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
 
@@ -319,8 +368,16 @@ On `cne_server`, do not enable MTP when using `conversation_id` for
 multi-turn chat — the two modes are mutually exclusive (see **Chat sessions
 vs MTP** above and `docs/FEATURES.md` §5).
 
-**Live tests** — with the LFM2 artifact on disk, `ctest --test-dir build -R server_e2e_live`
-exercises the full HTTP + session path; see **[docs/TESTING.md](docs/TESTING.md)**.
+**Live tests** — with a GGUF on disk:
+
+```sh
+ctest --test-dir build -R server_e2e_live --output-on-failure          # LFM2 HTTP
+ctest --test-dir build -R server_e2e_qwen_live --output-on-failure     # Qwen HTTP
+ctest --test-dir build -R 'server_api_live|server_api_per_user_live' --output-on-failure
+ctest --test-dir build -R server_gateway_live --output-on-failure       # + gateway venv
+```
+
+See **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Roadmap
 
@@ -330,9 +387,8 @@ exercises the full HTTP + session path; see **[docs/TESTING.md](docs/TESTING.md)
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
-5. `cne-server` with OpenAI-compatible SSE — **serving + serial multi-user
-   sessions done**; disconnect detection + `cne-setup` done; live HTTP E2E
-   test; multi-tenant API plan in **docs/SERVING.md** (proxy now, engine Phase 1+)
+5. `cne-server` + **API gateway** for multi-tenant serving — **done** (API mode,
+   `cne_gateway`, live E2E); fairness/autoscale in **docs/SERVING.md** §5
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`) —
    config-file plumbing shipped via `cne-setup`
 7. Tenant-aware sessions, fairness, autotune, packaging — see **docs/SERVING.md** §5
