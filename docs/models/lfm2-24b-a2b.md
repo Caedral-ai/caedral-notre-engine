@@ -146,7 +146,7 @@ bench'd in CNE yet** — run `cne_identity_gate` before trusting velocity):
 | model | arch | top-K | notes |
 |---|---|---|---|
 | **LFM2-8B-A1B** | `lfm2moe` | 4 | Same family as 24B-A2B; [LiquidAI/LFM2-8B-A1B-GGUF](https://huggingface.co/LiquidAI/LFM2-8B-A1B-GGUF) |
-| **LFM2.5-8B-A1B** | `lfm2moe` | 4 | Successor checkpoint; same graph layout expected |
+| **LFM2.5-8B-A1B** | `lfm2moe` | 4 | Successor checkpoint; validated profile **docs/models/lfm2.5-8b-a1b.md** |
 | **SmallThinker** (1B / 4B / 20B MoE) | `smallthinker` | 4 | Separate gate/up/down experts; no shortconv — MoE hooks should match |
 
 Models with default top-K **8+** (e.g. Qwen3.6 MoE) do **not** hit the fast path

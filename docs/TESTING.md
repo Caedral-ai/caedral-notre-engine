@@ -23,6 +23,7 @@ Live tests read env and runtime settings from JSON instead of long `ctest`
 | `server_api_per_user_live` | `server_api_per_user_live.json` | API mode: `session_max_per_user` eviction (fails fast on boot errors) |
 | `server_gateway_live` | `server_gateway_live.json` | API-key gateway → CNE: chat, KV reuse |
 | `server_e2e_qwen_live` | `server_e2e_qwen_live.json` | Qwen3.6: same HTTP path; `CNE_MTP=0`, thinking off |
+| `server_e2e_lfm25_live` | `server_e2e_lfm25_live.json` | LFM2.5-8B-A1B: HTTP + session KV; thinking off |
 | `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating `conversation_id`s (no auth) |
 | `session_kv_qwen_live` | `session_kv_qwen_live.json` | Qwen3.6 runtime session KV (slow) |
 | `session_bigctx_live` | `session_bigctx_live.json` | LFM2 ~7k-token prefill at ctx=8192 (slow) |
@@ -68,7 +69,7 @@ From the **build** directory (not the repo root):
 ctest --test-dir build -R 'server_e2e_live|server_api_live|server_api_per_user_live|server_gateway_live' --output-on-failure
 
 # Qwen models (if downloaded)
-ctest --test-dir build -R 'server_e2e_qwen_live|session_kv_qwen_live' --output-on-failure
+ctest --test-dir build -R 'server_e2e_qwen_live|server_e2e_lfm25_live|session_kv_qwen_live' --output-on-failure
 
 # fast subset only (unit tests; no GGUF)
 ctest --test-dir build -LE slow --output-on-failure
@@ -118,7 +119,7 @@ decode (`docs/FEATURES.md` §5).
 | Label | tests | typical time |
 |---|---|---|
 | *(none)* | `session_lcp`, `session_tenant`, `api_unit`, `gateway_unit`, `kv_budget`, … | < 1 s |
-| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_api_live`, `server_api_per_user_live`, `server_gateway_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – few min |
+| `slow` | `server_e2e_live`, `server_e2e_qwen_live`, `server_e2e_lfm25_live`, `server_api_live`, `server_api_per_user_live`, `server_gateway_live`, `session_kv_qwen_live`, `session_bigctx_live` | ~20 s – few min |
 
 `session_kv_live` loads the full model but finishes in ~20–40 s on LFM2.
 `server_api_per_user_live` ~30 s (LFM2). Qwen HTTP E2E ~60–80 s each.

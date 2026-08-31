@@ -32,11 +32,13 @@ artifact:
 ```sh
 ./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # reference model (~22.9 GB)
 ./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B, no-stream profile (~14.4 GB)
+./tools/scripts/download-lfm2.5-8b-a1b.sh             # LFM2.5-8B-A1B AtomicChat UD-Q4_K_XL (~5.2 GB)
 ```
 
 Both scripts verify sha256 and run the one-time alignment pass
 (`cne_prepare`). Prepared artifacts are listed first by `cne-setup` and
-marked `-prepared.gguf`. Per-model profiles: see `docs/models/`.
+marked `-prepared.gguf`. Per-model profiles: `docs/models/lfm2-24b-a2b.md`,
+`docs/models/lfm2.5-8b-a1b.md`, `docs/models/qwen3.6-35b-a3b-q4_k_xl.md`.
 
 The download script ends by running the one-time alignment pass
 (`cne_prepare`) that expert streaming requires. Prepared artifacts are

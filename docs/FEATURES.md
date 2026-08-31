@@ -311,6 +311,8 @@ One toggle controls all fork hooks in `ggml-cpu/repack.cpp`. Tokens stay
 identical whether on or off; only the CPU kernel path changes.
 
 **Validated:** LFM2-24B-A2B prepared Q4_K_M (+10.6% tg250 vs `CNE_KERNELS=0`).
+LFM2.5-8B-A1B uses the same top-4 MoE path — run `cne_identity_gate` after
+download (see **docs/models/lfm2.5-8b-a1b.md**).
 
 **Likely compatible** (same top-4 MoE `mul_mat_id` pattern; not bench'd here yet):
 

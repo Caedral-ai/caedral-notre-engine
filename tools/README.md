@@ -17,7 +17,8 @@ Shell helpers — run from the repo root:
 | Script | Purpose |
 |---|---|
 | `scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh` | Fetch + verify + prepare Qwen artifact |
-| `scripts/download-lfm2-24b-a2b.sh` | Fetch + verify + prepare LFM2 artifact |
+| `scripts/download-lfm2-24b-a2b.sh` | Fetch + verify + prepare LFM2-24B artifact |
+| `scripts/download-lfm2.5-8b-a1b.sh` | Fetch + verify + prepare LFM2.5-8B-A1B artifact |
 | `scripts/run-canary.sh` | PL-T1 long-gen canary (lossless vs lossy + drift gate) |
 | `scripts/run-ppl.sh` | Perplexity over PTB corpus via `build-meas` llama-perplexity |
 
