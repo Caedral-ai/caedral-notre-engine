@@ -1,0 +1,15 @@
+# Example API keys for cne_server (API mode).
+# One key per line. Optional second column binds a default user id:
+#
+#   my-secret-key alice
+#   other-key bob
+#
+# Load with server.json:
+#   "api_keys_file": "models/api_keys.txt"
+# or env: CNE_API_KEYS_FILE=models/api_keys.txt
+#
+# Clients must send:
+#   Authorization: Bearer <key>
+#   X-User-Id: <user>   (required unless the key line includes a user column)
+
+dev-local-key change-me-in-production

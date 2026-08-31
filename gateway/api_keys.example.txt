@@ -1,0 +1,10 @@
+# Client API keys for the public gateway (one key per user).
+# Format: <api_key> <user_id>
+#
+# Issue keys out-of-band (admin); clients send:
+#   Authorization: Bearer <api_key>
+#
+# The gateway maps user_id → X-User-Id for cne_server (internal key only).
+
+cne_sk_alice_dev_replace_me_in_production alice
+cne_sk_bob_dev_replace_me_in_production bob

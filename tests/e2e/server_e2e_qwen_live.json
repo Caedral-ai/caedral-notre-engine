@@ -1,0 +1,22 @@
+{
+  "description": "Qwen3.6 HTTP E2E — sessions only (CNE_MTP=0), thinking off",
+  "model": "models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf",
+  "env": {
+    "CNE_STREAM": "0",
+    "CNE_MTP": "0",
+    "CNE_CTX": "4096",
+    "CNE_CACHE_GIB": "0",
+    "CNE_THREADS": "6",
+    "CNE_SESSION_MAX": "2",
+    "CNE_THINK": "0"
+  },
+  "options": {
+    "port": 0,
+    "boot_timeout_s": 300
+  },
+  "chat": {
+    "conversation_id": "e2e-qwen-session",
+    "max_tokens": 16,
+    "think_off": true
+  }
+}

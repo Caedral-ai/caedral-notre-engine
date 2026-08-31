@@ -1,0 +1,28 @@
+{
+  "description": "Gateway + cne_server live E2E (API key auth, chat, session KV)",
+  "model": "",
+  "env": {
+    "CNE_MTP": "0",
+    "CNE_STREAM": "0",
+    "CNE_CTX": "2048",
+    "CNE_SESSION_MAX": "3",
+    "CNE_API_MODE": "1",
+    "CNE_API_KEY": "e2e-test-secret",
+    "CNE_SESSION_MAX_PER_USER": "2",
+    "CNE_API_RPM": "120"
+  },
+  "gateway": {
+    "env": {
+      "CNE_INTERNAL_API_KEY": "e2e-test-secret",
+      "CNE_GATEWAY_RPM": "120"
+    },
+    "api_keys_file": "gateway/api_keys.example.txt",
+    "client_api_key": "cne_sk_alice_dev_replace_me_in_production"
+  },
+  "chat": {
+    "chat_id": "e2e-gw-chat",
+    "max_tokens": 12,
+    "think_off": true
+  },
+  "boot_timeout_s": 180
+}

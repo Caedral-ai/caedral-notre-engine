@@ -7,6 +7,7 @@ add_library(cne_core STATIC
     features/streaming/direct_io.cpp
     features/streaming/io_scheduler.cpp
     memory/memory_budget.cpp
+    memory/kv_budget.cpp
 )
 target_include_directories(cne_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_compile_features(cne_core PUBLIC cxx_std_17)

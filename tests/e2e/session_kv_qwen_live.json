@@ -1,0 +1,15 @@
+{
+  "description": "Qwen3.6 session KV reuse at ctx=4096 (no MTP, no streaming)",
+  "model": "models/qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf",
+  "env": {
+    "CNE_SESSION_MAX": "2",
+    "CNE_STREAM": "0",
+    "CNE_MTP": "0"
+  },
+  "runtime": {
+    "cap_gib": 0,
+    "n_ctx": 4096,
+    "n_threads": 6,
+    "stream_on": false
+  }
+}

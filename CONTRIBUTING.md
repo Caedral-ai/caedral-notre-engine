@@ -34,7 +34,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 | `chore` | tooling, housekeeping |
 
 **Scopes**: `core`, `gguf`, `moe`, `cache`, `io`, `memory`, `runtime`,
-`metrics`, `server`, `cli`, `adapter`, `tests`.
+`metrics`, `server`, `cli`, `tests`.
 
 Examples:
 
@@ -123,4 +123,12 @@ flash/token, hit-rate) from the benchmark protocol.
 
 - `third_party/llama.cpp` is pinned; bump via dedicated `build(llama.cpp): pin
   vX.Y.Z` commit including upstream-compat gate results.
+- **CNE llama fork:** kernel work lands on
+  [trycaedral/llama.cpp](https://github.com/trycaedral/llama.cpp) branch
+  `cne/cpu-kernels` (submodule URL in `.gitmodules`). Upstream sync remote:
+  `upstream` → `ggml-org/llama.cpp`. Product logic stays in `core/` and
+  `runtime/` — never in the fork beyond ggml-cpu compute hooks.
+  LFM2 custom kernels live in `ggml-cpu/repack.cpp` (`CNE_KERNELS` toggle).
+  x86 `4vx`/`2vx` are generic today — native AVX-VNNI fusion is the next
+  kernel milestone (see `docs/models/lfm2-24b-a2b.md` § Kernel roadmap).
 - Prefer vendored/minimal deps; no heavyweight frameworks in core.

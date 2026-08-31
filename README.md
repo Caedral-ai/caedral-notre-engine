@@ -102,9 +102,10 @@ Users state intent; the engine resolves settings:
 | Dense residency policies | ![](https://img.shields.io/badge/status-working-brightgreen) | mmap / pre-warmed / anonymous copies — chosen per regime; anon eliminates page-fault storms near the RAM boundary |
 | Memory budget manager | ![](https://img.shields.io/badge/status-working-brightgreen) | clamps any requested cache size to what the machine can actually hold; never relies on page-cache luck |
 | Regime classification | ![](https://img.shields.io/badge/status-working-brightgreen) | R0–R4 detection at load time drives feature selection |
-| Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%) |
-| Mixed-precision serving | ![](https://img.shields.io/badge/status-designed-blue) | cache-missed experts served from lower-precision sidecars (bounded quality trade, opt-in) |
-| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` on the extracted runtime; single session; MTP-enabled |
+| Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
+| Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
+| OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; API mode (`chat_id`, per-user caps) |
+| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | Path B public API: client API keys, rate limits, proxies to `cne_server` on localhost — **docs/GATEWAY.md** |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -130,50 +131,70 @@ velocity gains and reproduction commands: **[docs/BENCHMARKS.md](docs/BENCHMARKS
 
 ## Architecture
 
+**Local / single-user** — client talks to `cne_server` directly:
+
 ```
 Client (OpenAI SDK / Open WebUI / n8n)
-        │  HTTP/SSE                      (live via cne-server)
+        │  HTTP/SSE
         ▼
-    cne-server ── OpenAI-compatible API (auth/quotas: later)
+    cne_server ── OpenAI-compatible API
         ▼
-    cne-runtime ── regime classifier → feature activation
+    cne_runtime ── regime classifier → feature activation
         ▼                              ▼
   Memory manager                  Feature modules
-  budgets · regimes               streaming · speculation · precision
         ▼                              ▼
-     Expert LRU cache  ←────  O_DIRECT I/O lanes
-                     ▼
-             NVMe / Flash (GGUF shards)
+     Expert LRU cache  ←────  O_DIRECT I/O lanes → NVMe / Flash (GGUF)
 ```
 
-The runtime speaks through `cne_bench` (measurement driver) and
-`cne-server` (serving); `cne-setup` resolves hardware/model into a
-confirmed configuration for the server.
+**Public multi-user API** — do not expose `cne_server` on the internet; use the
+gateway (**docs/GATEWAY.md**, **docs/SERVING.md**):
+
+```
+Clients (Bearer API key)
+        │  HTTPS (nginx/Caddy optional)
+        ▼
+    cne_gateway :8090     client keys, RPM, maps key → user_id
+        │  internal API key + X-User-Id + chat_id
+        ▼
+    cne_server :8080      API mode, 127.0.0.1 only
+        ▼
+    (same runtime stack as above)
+```
+
+`cne_bench` (measurement) and `cne_setup` (confirmed `server.json` + optional
+API mode fields) sit beside the server; the gateway reads `gateway.json`.
 
 ## Repository layout
 
+Full guide: **[docs/STRUCTURE.md](docs/STRUCTURE.md)**.
+
 ```
 core/include/cne/          public headers (model, memory, config…)
-core/src/gguf/             GGUF reader, tensor classification, manifest registry
-core/src/memory/           memory budgets + regime classification
-core/src/features/
-  streaming/               slice cache · O_DIRECT file · I/O lane scheduler
-adapters/                  llama.cpp seam:
-                             cne_runtime.cpp     shared boot sequence (bench+server)
-                             cne_stream_cb.cpp   demand-serving runtime
-                             cne_stream_spec.cpp draft-MTP generation loop
-server/                    cne_server: OpenAI-compatible HTTP/SSE endpoint
-cli/                       user-facing CLIs:
-                             cne_setup       first-run config (detect, suggest, confirm)
-tools/                     drivers & probes:
-                             cne_bench       end-to-end bench
-                             cne_prepare     GGUF alignment tool
-                             cne_identity_gate  correctness harness
-tests/features/            unit tests mirroring core areas
-tests/runtime/             shared boot-sequence tests
-docs/                      FEATURES.md · SETUP.md (server setup guide) ·
-                           per-model notes
-third_party/               llama.cpp (pinned upstream submodule)
+core/src/                  engine library (cne_core)
+  gguf/                    GGUF reader, tensor classification, manifest registry
+  memory/                  memory budgets + regime classification
+  features/streaming/      slice cache · O_DIRECT file · I/O lane scheduler
+runtime/                   llama.cpp seam + demand-serving runtime (cne_runtime)
+  seam/                    thin llama backend probe (cne_adapter.*)
+  cne_runtime.cpp          shared boot sequence (bench + server)
+  cne_stream_cb.cpp        demand-serving runtime (fills, cache, anon dense)
+  cne_stream_spec.cpp      draft-MTP generation loop
+server/                    cne_server — OpenAI-compatible HTTP/SSE endpoint
+gateway/                   cne_gateway — API-key public proxy (Path B)
+cli/                       cne_setup — first-run config (detect, suggest, confirm)
+tools/                     shipped binaries + operator scripts
+  scripts/                 model download, canary, perplexity helpers
+  cne_prepare, cne_bench, cne_identity_gate, dev probes (see tools/README.md)
+bench/                     velocity harness scripts + local results (bench/README.md)
+tests/                     unit and integration tests
+  e2e/                     JSON configs for live tests (env + runtime)
+  gguf/ memory/ features/streaming/   core library
+  boot/ session/ server/   runtime + session + HTTP live checks
+  perplexity/              PL drift-gate unit tests
+docs/                      FEATURES · SETUP · SERVING · GATEWAY · TESTING · …
+third_party/llama.cpp      pinned kernel fork (branch cne/cpu-kernels; kernels in `ggml-cpu/cne/`)
+models/                    local GGUF artifacts (gitignored)
+internal-docs/             private kernel/ops research (separate git repo, gitignored)
 ```
 
 ## Quick start
@@ -182,13 +203,14 @@ Requirements: Linux, CMake ≥ 3.16, C++17 compiler, ~50 GB free disk for the
 reference model.
 
 ```sh
-# build
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
+# build (include tests + server + setup for live E2E)
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build -j
 
 # fetch + align a model (both scripts verify sha256 and run cne_prepare)
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
-./tools/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
+./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
 ```
 
 Both models then appear in `cne_setup`'s artifact picker automatically.
@@ -197,7 +219,7 @@ Recommended profiles:
 | model | total / active | profile | notes |
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
-| LFM2-24B-A2B | 24B / 2.3B | **no-stream** (naive mmap decode) | hybrid conv+attention; no MTP; fast sequential decode |
+| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server, ~9.5 tg250 (`CNE_KERNELS=1`) |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
@@ -235,13 +257,65 @@ curl http://localhost:8080/v1/chat/completions \
     -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
 ```
 
-Single session: requests serialize. Greedy by default (lossless);
+Single decode slot: requests serialize. Greedy by default (lossless);
 `temperature`/`top_p`/`seed` honored per request. Disable thinking with
 `CNE_THINK=0` or per-request `"chat_template_kwargs":{"enable_thinking":false}`.
 Abandoned streaming requests abort within one poll interval instead of
 hogging the engine slot; `CNE_MAX_REQ_S=<seconds>` adds an optional wall
-cap per request. Full endpoint/knob reference in `docs/FEATURES.md` §11;
+cap per request.
+
+**Chat sessions vs MTP** — choose one per `server.json` / env, not both:
+
+| Goal | Config |
+|---|---|
+| Multi-turn or multi-user chat (`conversation_id`) | `CNE_MTP=0` (default) |
+| Speculative decode speed (stateless) | `CNE_MTP=k`, no `conversation_id` |
+
+With MTP on, the server ignores `conversation_id` and clears KV after every
+request. Sessions need sequential decode so KV can be reused safely; MTP uses
+dual contexts and mid-step KV rollbacks that session bookkeeping does not
+track yet. Full rationale: **[docs/FEATURES.md](docs/FEATURES.md)** §5 and §11.
+
+Full endpoint/knob reference in `docs/FEATURES.md` §11;
 step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
+**Multi-user API** (auth, `session_max`, proxy layer, roadmap):
+**[docs/SERVING.md](docs/SERVING.md)**. **API-key gateway (Path B):**
+**[docs/GATEWAY.md](docs/GATEWAY.md)**.
+Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING.md)**.
+
+### Multi-user API (gateway)
+
+For a **public** API, bind `cne_server` to `127.0.0.1` only and put
+**`cne_gateway`** in front. Users get a **client API key** (no login/JWT).
+
+```sh
+# 1. Setup with API mode (writes models/server.json + models/api_keys.txt)
+./build/cli/cne_setup -y
+
+# 2. Engine (localhost, API mode from server.json)
+./build/server/cne_server
+
+# 3. Gateway (separate terminal)
+cp gateway/gateway.json.example gateway/gateway.json   # set internal_api_key
+cp gateway/api_keys.example.txt gateway/api_keys.local.txt  # client keys
+./tools/scripts/run-gateway.sh
+
+# 4. Client calls the gateway (not cne_server)
+curl http://127.0.0.1:8090/v1/chat/completions \
+  -H "Authorization: Bearer <client-api-key>" \
+  -H "X-Chat-Id: my-chat" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":32}'
+```
+
+Two key tiers: **client API key** (gateway, per user) and **internal key**
+(`models/api_keys.txt` / `CNE_INTERNAL_API_KEY`, gateway → engine only).
+Full guide: **[docs/GATEWAY.md](docs/GATEWAY.md)** · architecture:
+**[docs/SERVING.md](docs/SERVING.md)**.
+
+Gateway unit tests: `cd gateway && pip install -r requirements.txt && PYTHONPATH=. pytest tests -q`.
+Live stack: `ctest --test-dir build -R server_gateway_live --output-on-failure`
+(needs GGUF + `gateway/.venv`).
 
 <details>
 <summary><strong>Environment knobs (development)</strong></summary>
@@ -249,9 +323,12 @@ step-by-step setup in **[docs/SETUP.md](docs/SETUP.md)**.
 | Variable | Values | Effect |
 |---|---|---|
 | `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
+| `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
 | `CNE_LANES` | N | parallel slice-read workers (default 4) |
-| `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k) |
+| `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k); **incompatible with server `conversation_id` sessions** |
 | `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |
+| `CNE_SESSION` | `0` | disable conversation KV reuse on the server (default on when `conversation_id` is sent) |
+| `CNE_SESSION_MAX` | N | LRU cap on tracked conversations + KV lanes; splits `ctx` evenly (see **docs/SERVING.md**) |
 | `CNE_THREADS` | N | compute threads (default 8); physical-core count beats SMT on many laptops |
 | `CNE_FA` | set = on | flash attention; ~+3% at ctx 1024, scales with context |
 | `CNE_KV_Q8` | set = on | q8_0 KV cache; measured CPU regression on the reference machine, kept for re-measurement |
@@ -287,6 +364,21 @@ the tuned config (`CNE_MTP=8 CNE_MTP_P_MIN=0.5 CNE_THREADS=6`) is 0%;
 the lossy expert-mass knob never activates on this model (measured:
 zero dropped slices), and KV q8_0 was rejected as a CPU regression.
 
+On `cne_server`, do not enable MTP when using `conversation_id` for
+multi-turn chat — the two modes are mutually exclusive (see **Chat sessions
+vs MTP** above and `docs/FEATURES.md` §5).
+
+**Live tests** — with a GGUF on disk:
+
+```sh
+ctest --test-dir build -R server_e2e_live --output-on-failure          # LFM2 HTTP
+ctest --test-dir build -R server_e2e_qwen_live --output-on-failure     # Qwen HTTP
+ctest --test-dir build -R 'server_api_live|server_api_per_user_live' --output-on-failure
+ctest --test-dir build -R server_gateway_live --output-on-failure       # + gateway venv
+```
+
+See **[docs/TESTING.md](docs/TESTING.md)**.
+
 ## Roadmap
 
 1. Streaming pipeline, budget manager, regime classification, tooling — **done**
@@ -295,12 +387,11 @@ zero dropped slices), and KV q8_0 was rejected as a CPU regression.
 3. Speculation telemetry: separate draft/verify timing to decide viability
    per hardware class
 4. Mixed-precision miss serving (opt-in lossy profile)
-5. `cne-server` with OpenAI-compatible SSE — **single-session serving done**;
-   disconnect detection + `cne-setup` first-run CLI done; hardening
-   (auth, quotas, multi-session) next
+5. `cne-server` + **API gateway** for multi-tenant serving — **done** (API mode,
+   `cne_gateway`, live E2E); fairness/autoscale in **docs/SERVING.md** §5
 6. User-facing quality profiles (`lossless` / `balanced` / `fast`) —
    config-file plumbing shipped via `cne-setup`
-7. Multi-user serving, autotune, packaging
+7. Tenant-aware sessions, fairness, autotune, packaging — see **docs/SERVING.md** §5
 
 Non-goals: GPU offloading, training/fine-tuning, dense-model optimization
 (that's llama.cpp's job), Windows/macOS support initially.

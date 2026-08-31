@@ -29,7 +29,7 @@ artifact runs on machines with far less RAM via R3/R4 streaming.
 | Size | 22.9 GB download → 21.3 GiB after `cne_prepare` alignment |
 
 ```sh
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh   # fetch + sha256 verify + prepare
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # fetch + sha256 verify + prepare
 ```
 
 ## Measured velocity gains
@@ -78,7 +78,7 @@ partial rounds across all published runs.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh
 
 # baseline: naive mmap
 CNE_THREADS=6 ./build/tools/cne_bench \
@@ -108,3 +108,70 @@ Notes:
   gating is inert on this model (flat routers)
 
 Full feature guidance: [FEATURES.md](FEATURES.md).
+
+## LFM2-24B-A2B (second artifact)
+
+No MTP head — sequential decode only. Hybrid shortconv + MoE; **4 threads**
+beats 6/8 on the reference chip (opposite of Qwen). Full profile:
+[models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md).
+
+### Measured (i5-1135G7, prepared Q4_K_M)
+
+| test | tok/s | tool / config |
+|---|---|---|
+| decode warm steady-state | **~10.5–11.5** | `cne_server` / `cne_bench`, `CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4` |
+| decode tg128 (`CNE_KERNELS=1`, 5-run mean) | **8.61 ± 0.31** | `llama-bench`, t4, 2026-08-27 |
+| decode tg128 (`CNE_KERNELS=0`, 5-run mean) | 8.21 ± 0.24 | same session |
+| decode tg250 (`CNE_KERNELS=1`, 5-rep) | **11.92 ± 0.42** | `llama-bench`, t4, pp512, `21767de7d`, 2026-08-28 |
+| decode tg250 (`CNE_KERNELS=0`, 5-rep) | 10.61 ± 0.13 | same session; **+12.3%** kernel delta |
+| decode tg250 (`CNE_KERNELS=1`, 5-run mean) | **9.50 ± 0.17** | `llama-bench`, t4, 2026-08-27 (prior session) |
+| decode tg250 (`CNE_KERNELS=0`, 5-run mean) | 8.59 ± 0.15 | prior session; **+10.6%** |
+| decode tg128 (custom kernels, single session) | **11.48 ± 0.46** | `cne/cpu-kernels` @ `8d2440243` — treat as upper bound, high variance |
+| server 1000 tok wall-clock | **~10.5** | `cne_server`; kernels on/off within noise at this length |
+| decode fixed 300 tok | **10.84** | pre-B3 `cne_bench`; re-measure after fork pin |
+| decode tg128 (pre-B3, mmap) | **9.26 ± 1.12** | kernel floor without warm dense |
+| prefill pp512–4096 | **~41–44** | `llama-bench`, t4 |
+
+**Kernel A/B scripts:** `bench/scripts/lfm2/tg250-kernel-ab.sh` (canonical tg250),
+`bench/scripts/lfm2/tg128-microbench.sh` (tg128 smoke).
+History TSVs under `bench/results/` (gitignored).
+
+Decode is **~4× slower than prefill** on this stack. Q4 `MUL_MAT` +
+`MUL_MAT_ID` dominate the decode graph (~89% of heavy ops); shortconv
+(`SSM_CONV`) is ~1% of wall time in microbench.
+
+Build: Release with `-march=native`, `GGML_CPU_REPACK=ON` (CNE default).
+Repack OFF costs ~5% decode; an SSE4.2-only build costs **~2.7×** — do not
+ship generic x86 binaries for this model class.
+
+### Reproduce
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+./tools/scripts/download-lfm2-24b-a2b.sh
+
+# serving (recommended)
+CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 \
+  ./build/server/cne_server \
+  models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf
+
+# bench throughput (300-token fixed run)
+CNE_STREAM=0 CNE_DENSE=warm CNE_THREADS=4 CNE_CTX=4096 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf \
+  0 300 32 0
+```
+
+**Measurement caveat:** `cne_bench` that restarts the process each run can
+show 5–6 tok/s with heavy majflt even when `CNE_DENSE=warm` is set — use a
+long-lived `cne_server` or `llama-bench tg` for clean decode probes unless
+the warm path is already resident.
+
+A 2026-08 subset-expert self-spec spike measured **~5 tok/s** (~2.2× slower
+than warm sequential) despite passing the identity gate; code and probe
+artifacts were removed from the tree.
+
+B4 prepare-time gate‖up fusion passed identity but was **slower than the custom
+kernel path** and was reverted. Next lossless kernel work: shortconv GEMV (~14%
+decode wall per graph census), optional AVX-VNNI `4vx` inner loop — see
+[models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Kernel roadmap.

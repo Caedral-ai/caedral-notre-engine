@@ -1,0 +1,21 @@
+{
+  "description": "LFM2 HTTP E2E — cne_server fork, chat + session KV reuse",
+  "model": "models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf",
+  "env": {
+    "CNE_STREAM": "0",
+    "CNE_MTP": "0",
+    "CNE_CTX": "2048",
+    "CNE_CACHE_GIB": "0",
+    "CNE_THREADS": "4",
+    "CNE_SESSION_MAX": "2"
+  },
+  "options": {
+    "port": 0,
+    "boot_timeout_s": 180
+  },
+  "chat": {
+    "conversation_id": "e2e-lfm2-session",
+    "max_tokens": 12,
+    "think_off": false
+  }
+}

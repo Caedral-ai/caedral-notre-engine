@@ -3,6 +3,10 @@ build-*/
 .cache/
 compile_commands.json
 
+# benchmark outputs (scripts live in bench/scripts/)
+bench/results/*
+!bench/results/.gitkeep
+
 # editors / os
 .vscode/
 .idea/
@@ -14,6 +18,13 @@ compile_commands.json
 
 # local models & artifacts (never commit weights)
 /models/
+models/api_keys.txt
 *.gguf
 *.bin
 __pycache__/
+
+# gateway / API secrets (local only)
+gateway/api_keys.local.txt
+gateway/gateway.json
+gateway/.env
+gateway/.env.local

@@ -7,6 +7,8 @@
 #include "cne/config.h"
 
 #include "cne_runtime.h"
+#include "cne_session.h"
+#include "cne_api.h"
 #include "cne_stream_cb.h"
 #include "cne_stream_spec.h"
 
@@ -22,10 +24,13 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
@@ -46,11 +51,19 @@ struct ConfigKnob {
 
 const ConfigKnob g_config_knobs[] = {
     {"stream", "STREAM"},       {"think", "THINK"},
-    {"mtp", "MTP"},             {"mtp_p_min", "MTP_P_MIN"},
-    {"threads", "THREADS"},     {"ctx", "CTX"},
-    {"cache_gib", "CACHE_GIB"}, {"dense", "DENSE"},
-    {"max_req_s", "MAX_REQ_S"},
+    {"kernels", "KERNELS"},     {"mtp", "MTP"},
+    {"mtp_p_min", "MTP_P_MIN"}, {"threads", "THREADS"},
+    {"ctx", "CTX"},             {"cache_gib", "CACHE_GIB"},
+    {"dense", "DENSE"},         {"max_req_s", "MAX_REQ_S"},
+    {"session_max", "SESSION_MAX"},
+    {"api_mode", "API_MODE"},
+    {"api_rpm", "API_RPM"},
+    {"session_max_per_user", "SESSION_MAX_PER_USER"},
 };
+
+// API keys from server.json (merged at boot); not injected as env.
+std::unordered_set<std::string>              g_cfg_api_keys;
+std::unordered_map<std::string, std::string> g_cfg_key_to_user;
 
 // model_out stays empty when the config does not name one (argv supplies it).
 void apply_config_file(const std::string& path, std::string& model_out,
@@ -96,6 +109,30 @@ void apply_config_file(const std::string& path, std::string& model_out,
         host_out = cfg["host"].get<std::string>();
     if (cfg.contains("port") && cfg["port"].is_number_integer())
         port_out = cfg["port"].get<int>();
+
+    if (cfg.contains("api_keys") && cfg["api_keys"].is_array()) {
+        for (const auto& v : cfg["api_keys"]) {
+            if (!v.is_string()) continue;
+            const std::string key = v.get<std::string>();
+            if (!key.empty()) g_cfg_api_keys.insert(key);
+        }
+    }
+    if (cfg.contains("api_keys_file") && cfg["api_keys_file"].is_string()) {
+        std::string keys_path = cfg["api_keys_file"].get<std::string>();
+        if (!keys_path.empty() && !fs::path(keys_path).is_absolute())
+            keys_path = (fs::path(path).parent_path() / keys_path)
+                            .lexically_normal()
+                            .string();
+        if (!getenv("CNE_API_KEYS_FILE")) {
+#ifdef _WIN32
+            _putenv_s("CNE_API_KEYS_FILE", keys_path.c_str());
+#else
+            setenv("CNE_API_KEYS_FILE", keys_path.c_str(), 1);
+#endif
+            fprintf(stderr, "[config] API_KEYS_FILE = %s (config)\n",
+                    keys_path.c_str());
+        }
+    }
 }
 
 // ---- engine state -----------------------------------------------------------
@@ -111,6 +148,7 @@ struct Engine {
     llama_context*     ctx       = nullptr;
     const llama_vocab* vocab     = nullptr;
     int                n_ctx     = 0;
+    int                n_ctx_per_seq = 0;
     size_t             cache_cap = 0;
     int                mtp_k     = 0;
     float              mtp_p_min = 0.0f;
@@ -118,15 +156,57 @@ struct Engine {
     bool               arch_qwen3    = false;  // enables the empty-think prefix
     std::string        chat_template;   // empty = model default template
     double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
-    int                ss_depth   = 0;  // CNE_SELF_SPEC draft depth; 0 = off
-    std::string        draft_path;      // CNE_DRAFT_MODEL artifact copy
-    llama_model*       ss_model = nullptr;
-    llama_context*     ss_ctx   = nullptr;
     std::mutex         gen_mutex;       // single-decode: serialize generation
+    std::atomic<int>   queue_waiting{0}; // requests blocked on gen_mutex
+    std::atomic<bool>  decode_active{false};
+    bool               sessions_enabled = true;  // CNE_SESSION=0 disables
+    cne::SessionStore  sessions{8};
+    std::string        active_conv_id;  // KV owner in the single ctx
 };
 
 Engine g_engine;
 std::atomic<long long> g_req_counter{0};
+
+struct ApiState {
+    cne::api::Settings settings;
+    std::unordered_set<std::string>              keys;
+    std::unordered_map<std::string, std::string> key_to_user;
+    std::unique_ptr<cne::api::RateLimiter>       limiter;
+};
+
+ApiState g_api;
+
+std::unordered_map<std::string, std::string> collect_headers(
+    const httplib::Request& req) {
+    std::unordered_map<std::string, std::string> out;
+    for (const auto& h : req.headers) out[h.first] = h.second;
+    return out;
+}
+
+void merge_api_keys() {
+    cne::api::load_keys(g_api.keys, g_api.key_to_user);
+    for (const auto& k : g_cfg_api_keys) g_api.keys.insert(k);
+}
+
+void init_api_state() {
+    g_api.settings = cne::api::load_settings();
+    merge_api_keys();
+    g_api.limiter =
+        std::make_unique<cne::api::RateLimiter>(g_api.settings.rpm_per_user);
+    if (g_api.settings.session_max_per_user > 0)
+        g_engine.sessions.set_max_slots_per_user(
+            g_api.settings.session_max_per_user);
+    if (g_api.settings.enabled) {
+        fprintf(stderr,
+                "[api] multi-tenant mode on (rpm=%d session_max_per_user=%zu "
+                "keys=%zu)\n",
+                g_api.settings.rpm_per_user,
+                g_api.settings.session_max_per_user, g_api.keys.size());
+        if (g_api.keys.empty())
+            fprintf(stderr,
+                    "[api] WARNING: API mode enabled but no keys configured\n");
+    }
+}
 
 json error_body(const std::string& message, const std::string& type) {
     return json{
@@ -331,21 +411,31 @@ void submit_job(std::function<void()> f) {
 
 // Sequential decode arm. Mirrors cne-bench's loop exactly: sample after each
 // forward, emit, then feed the token back in. Returns tokens emitted,
-// -1 on decode failure.
+// -1 on decode failure. When slot is set, reuses KV for the longest common
+// token prefix and appends generated tokens to the slot afterward.
 long long generate_sequential(Engine& eng, const std::vector<llama_token>& prompt,
                               llama_sampler* smpl, int n_gen, EmitCtx& emit,
-                              TokenStream* stream, std::string& finish_reason) {
-    // Prefill in n_batch-sized chunks: a single llama_batch_get_one over a
-    // long prompt aborts inside llama_decode (>512 rows kills the PROCESS).
-    const int n_batch = llama_n_batch(eng.ctx);
-    for (int off = 0; off < (int)prompt.size(); off += n_batch) {
-        const int len =
-            std::min((size_t)n_batch, prompt.size() - off);
-        if (llama_decode(eng.ctx, llama_batch_get_one(
-                const_cast<llama_token*>(prompt.data() + off), len))) {
-            fprintf(stderr, "[server] PREFILL FAILED at offset %d\n", off);
+                              TokenStream* stream, std::string& finish_reason,
+                              cne::SessionSlot* slot = nullptr,
+                              cne::SessionPrefillStats* prefill_stats = nullptr) {
+    if (slot) {
+        if (!cne::session_prefill(eng.ctx, *slot, prompt, prefill_stats)) {
+            fprintf(stderr, "[server] SESSION PREFILL FAILED\n");
             finish_reason = "error";
             return -1;
+        }
+    } else {
+        cne::session_clear_seq(eng.ctx, 0);
+        const int n_batch = llama_n_batch(eng.ctx);
+        for (int off = 0; off < (int)prompt.size(); off += n_batch) {
+            const int len =
+                std::min((size_t)n_batch, prompt.size() - off);
+            if (llama_decode(eng.ctx, llama_batch_get_one(
+                    const_cast<llama_token*>(prompt.data() + off), len))) {
+                fprintf(stderr, "[server] PREFILL FAILED at offset %d\n", off);
+                finish_reason = "error";
+                return -1;
+            }
         }
     }
 
@@ -355,8 +445,12 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
         llama_token id = llama_sampler_sample(smpl, eng.ctx, -1);
         if (llama_vocab_is_eog(eng.vocab, id)) { finish_reason = "stop"; break; }
         emit_token(emit, id);
+        if (slot) cne::session_append_token(*slot, id);
         cne::stream_set_step(i);
-        if (llama_decode(eng.ctx, llama_batch_get_one(&id, 1))) {
+        const bool ok = slot
+            ? cne::session_decode_token(eng.ctx, *slot, id)
+            : llama_decode(eng.ctx, llama_batch_get_one(&id, 1)) == 0;
+        if (!ok) {
             fprintf(stderr, "[server] DECODE FAILED at step %d\n", i);
             finish_reason = "error";
             return i;
@@ -366,6 +460,101 @@ long long generate_sequential(Engine& eng, const std::vector<llama_token>& promp
     }
     if (finish_reason.empty()) finish_reason = "length";
     return emit.emitted;
+}
+
+// Conversation KV binding. Returns nullptr for stateless requests (no id, MTP,
+// or CNE_SESSION=0). Caller must hold eng.gen_mutex.
+cne::SessionSlot* bind_conversation(Engine& eng, const std::string& conv_id,
+                                    bool clear_conv,
+                                    const std::string& owner = {}) {
+    const bool want =
+        eng.sessions_enabled && !conv_id.empty() && eng.mtp_k == 0;
+    if (!want) {
+        eng.active_conv_id.clear();
+        if (!conv_id.empty() && eng.mtp_k > 0)
+            fprintf(stderr,
+                    "[session] conversation_id ignored (MTP active)\n");
+        return nullptr;
+    }
+    cne::SessionErr err = cne::SessionErr::None;
+    if (clear_conv) {
+        eng.sessions.remove(conv_id, eng.ctx);
+        eng.active_conv_id = conv_id;
+        return eng.sessions.get_or_create(conv_id, eng.ctx, owner, &err);
+    }
+    eng.active_conv_id = conv_id;
+    return eng.sessions.get_or_create(conv_id, eng.ctx, owner, &err);
+}
+
+// Drop oldest non-system messages until rendered prompt fits the token budget.
+static size_t trim_messages_for_context(
+    json& messages, const std::function<int(const json&)>& count_tokens,
+    int max_prompt_tokens) {
+    size_t dropped = 0;
+    while (!messages.empty()) {
+        const int n = count_tokens(messages);
+        if (n <= 0) break;
+        if (n <= max_prompt_tokens) return dropped;
+        size_t drop_at = 0;
+        while (drop_at < messages.size() &&
+               messages[drop_at].value("role", "") == "system")
+            drop_at++;
+        if (drop_at >= messages.size()) break;
+        messages.erase(messages.begin() + (long) drop_at);
+        dropped++;
+    }
+    return dropped;
+}
+
+static bool resolve_conversation_id(const json& body,
+                                    const std::string& conv_hdr,
+                                    const std::string& api_user, bool api_mode,
+                                    std::string& conv_out, std::string& err,
+                                    int& http_status) {
+    conv_out.clear();
+    err.clear();
+    http_status = 400;
+
+    std::string chat_id;
+    if (body.contains("chat_id") && body["chat_id"].is_string())
+        chat_id = body["chat_id"].get<std::string>();
+
+    std::string conv_id;
+    if (body.contains("conversation_id") &&
+        body["conversation_id"].is_string())
+        conv_id = body["conversation_id"].get<std::string>();
+    else if (!conv_hdr.empty())
+        conv_id = conv_hdr;
+
+    if (!api_mode) {
+        conv_out = conv_id;
+        return true;
+    }
+
+    if (!chat_id.empty() && !conv_id.empty()) {
+        err         = "send either chat_id or conversation_id, not both";
+        http_status = 400;
+        return false;
+    }
+    if (!chat_id.empty()) {
+        conv_out = cne::api::make_conversation_id(api_user, chat_id);
+        return true;
+    }
+    if (!conv_id.empty()) {
+        if (!cne::api::conversation_owned_by(conv_id, api_user)) {
+            err         = "conversation_id does not belong to authenticated user";
+            http_status = 403;
+            return false;
+        }
+        conv_out = conv_id;
+        return true;
+    }
+    if (g_api.settings.require_chat_id) {
+        err         = "chat_id required in API mode for session reuse";
+        http_status = 400;
+        return false;
+    }
+    return true;
 }
 
 // Draft-MTP speculative arm (greedy only - lossless contract).
@@ -394,34 +583,6 @@ long long generate_mtp(Engine& eng, const std::vector<llama_token>& prompt,
         return -1;
     }
     if (finish_reason.empty())
-        finish_reason = st.produced < n_gen ? "stop" : "length";
-    return emit.emitted;
-}
-
-// Self-speculative arm (subset-expert drafter). Greedy only: verification
-// makes output bit-identical to the sequential arm.
-long long generate_selfspec(Engine& eng, const std::vector<llama_token>& prompt,
-                            int n_draft, int n_gen, EmitCtx& emit,
-                            std::string& finish_reason) {
-    cne::SpecStats st = cne::spec_selfspec_generate(
-            eng.model, eng.ctx, eng.ss_model, eng.ss_ctx,
-            prompt, n_draft, n_gen,
-            emit_token_cb, &emit, request_poll_stop);
-
-    fprintf(stderr,
-            "[selfspec] iterations=%ld drafted=%ld accepted=%ld (%.1f%%) "
-            "partials=%ld produced=%d\n",
-            st.iterations, st.drafted, st.accepted,
-            st.drafted ? 100.0 * st.accepted / st.drafted : 0.0,
-            st.partials, st.produced);
-
-    if (st.produced <= 0 && finish_reason.empty()) {
-        fprintf(stderr, "[server] SELF-SPEC GENERATION FAILED\n");
-        finish_reason = "error";
-        return -1;
-    }
-    if (emit.stop_reason && finish_reason.empty()) finish_reason = "abort";
-    else if (finish_reason.empty())
         finish_reason = st.produced < n_gen ? "stop" : "length";
     return emit.emitted;
 }
@@ -511,8 +672,11 @@ json chunk_base(const std::string& id, const std::string& model) {
          })}};
 }
 
-void handle_chat(httplib::Response& res, const json& body) {
+void handle_chat(httplib::Response& res, const json& body,
+                 const std::string& conv_hdr = "",
+                 const std::string& api_user = "") {
     Engine& eng = g_engine;
+    const bool api_mode = g_api.settings.enabled && !api_user.empty();
 
     bool  want_stream = body.value("stream", false);
     float temperature = body.value("temperature", 0.0f);
@@ -521,6 +685,20 @@ void handle_chat(httplib::Response& res, const json& body) {
     int max_tokens =
         body.value("max_tokens", body.value("max_completion_tokens", 256));
     if (max_tokens < 1) max_tokens = 1;
+
+    std::string conv_id;
+    {
+        std::string err;
+        int         st = 400;
+        if (!resolve_conversation_id(body, conv_hdr, api_user, api_mode,
+                                     conv_id, err, st)) {
+            res.status = st;
+            set_json(res, error_body(err, st == 403 ? "permission_error"
+                                                    : "invalid_request_error"));
+            return;
+        }
+    }
+    const bool clear_conv = body.value("clear_conversation", false);
 
     // Thinking control. Default = model behavior (think on). Override:
     //   request: "chat_template_kwargs": {"enable_thinking": false}
@@ -533,6 +711,47 @@ void handle_chat(httplib::Response& res, const json& body) {
             body["chat_template_kwargs"]["enable_thinking"].get<bool>();
 
     json messages = body["messages"];
+
+    const int lane_ctx =
+        eng.n_ctx_per_seq > 0 ? eng.n_ctx_per_seq : eng.n_ctx;
+    const int max_prompt_tokens = lane_ctx - max_tokens - 4;
+    if (max_prompt_tokens < 1) {
+        res.status = 400;
+        set_json(res, error_body(
+            "max_tokens too large for context lane (" +
+                std::to_string(lane_ctx) + " tokens)",
+            "invalid_request_error"));
+        return;
+    }
+
+    auto count_msg_tokens = [&](const json& msgs) -> int {
+        std::string rendered, terr;
+        if (!apply_chat_template(msgs, rendered, terr)) return -1;
+        return (int) tokenize(rendered, false).size();
+    };
+
+    const size_t trimmed =
+        trim_messages_for_context(messages, count_msg_tokens, max_prompt_tokens);
+    if (trimmed > 0)
+        fprintf(stderr, "[api] trimmed %zu oldest message(s) user=%s\n",
+                trimmed, api_user.empty() ? "-" : api_user.c_str());
+
+    const int final_prompt_tokens = count_msg_tokens(messages);
+    if (final_prompt_tokens < 0) {
+        res.status = 400;
+        set_json(res, error_body("could not tokenize messages",
+                                 "invalid_request_error"));
+        return;
+    }
+    if (final_prompt_tokens > max_prompt_tokens) {
+        res.status = 400;
+        set_json(res, error_body(
+            "messages exceed context lane (" +
+                std::to_string(lane_ctx) +
+                " tokens) even after trim; shorten system prompt or max_tokens",
+            "context_length_exceeded"));
+        return;
+    }
 
     std::string rendered, err;
     if (!apply_chat_template(messages, rendered, err)) {
@@ -577,22 +796,48 @@ void handle_chat(httplib::Response& res, const json& body) {
         fprintf(stderr, "[debug] rendered prompt (%zu chars):\n%s\n<<<END>>>\n",
                 rendered.size(), rendered.c_str());
 
-    // Context guard: fail loudly instead of the mid-run abort the default
-    // small context produces under MTP ("failed to find a memory slot").
-    int headroom = eng.n_ctx - (int)prompt.size() - 4;
+    // Context guard: per-lane limit when multi-seq sessions are active.
+    int headroom = lane_ctx - (int)prompt.size() - 4;
     if (headroom < 1) {
         res.status = 400;
         set_json(res, error_body(
             "prompt of " + std::to_string(prompt.size()) +
-                " tokens does not fit context of " + std::to_string(eng.n_ctx) +
-                "; raise CNE_CTX",
+                " tokens does not fit context lane of " +
+                std::to_string(lane_ctx) + "; raise CNE_CTX or trim messages",
             "context_length_exceeded"));
         return;
     }
     const int n_gen = std::min(max_tokens, headroom);
 
     // Single-decode runtime: serialize generation across connections.
+    g_engine.queue_waiting.fetch_add(1, std::memory_order_relaxed);
+    const auto queue_t0 = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> gen_lock(eng.gen_mutex);
+    g_engine.queue_waiting.fetch_sub(1, std::memory_order_relaxed);
+    const double queue_wait_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - queue_t0).count();
+    if (queue_wait_s >= 0.05)
+        fprintf(stderr,
+                "[queue] waited %.0fms (%d still queued)\n",
+                queue_wait_s * 1000.0,
+                eng.queue_waiting.load(std::memory_order_relaxed));
+    eng.decode_active.store(true, std::memory_order_relaxed);
+    struct DecodeActiveGuard {
+        Engine& e;
+        ~DecodeActiveGuard() {
+            e.decode_active.store(false, std::memory_order_relaxed);
+        }
+    } decode_guard{eng};
+
+    cne::SessionSlot* slot =
+        bind_conversation(eng, conv_id, clear_conv, api_user);
+    if (api_mode && !conv_id.empty() && slot == nullptr) {
+        res.status = 403;
+        set_json(res, error_body("conversation owned by another user",
+                                 "permission_error"));
+        return;
+    }
+    cne::SessionPrefillStats prefill_stats;
 
     const auto t0 = std::chrono::steady_clock::now();
     const auto deadline =
@@ -606,6 +851,11 @@ void handle_chat(httplib::Response& res, const json& body) {
     auto log_stats = [&](long long out, bool ok) {
         const double secs = std::chrono::duration<double>(
                                 std::chrono::steady_clock::now() - t0).count();
+        if (slot && (prefill_stats.reused_tokens || prefill_stats.prefilled_tokens))
+            fprintf(stderr,
+                    "[session] conv=%s reused=%zu prefilled=%zu prompt=%zu\n",
+                    conv_id.c_str(), prefill_stats.reused_tokens,
+                    prefill_stats.prefilled_tokens, prompt.size());
         fprintf(stderr,
                 "[server] prompt %zu tok | %lld tok out | %.2fs | %.2f tok/s | "
                 "%s\n",
@@ -623,6 +873,8 @@ void handle_chat(httplib::Response& res, const json& body) {
             std::string              id, finish_reason;
             std::vector<llama_token> prompt_tokens;
             llama_sampler*           smpl = nullptr;
+            cne::SessionSlot*        slot = nullptr;
+            cne::SessionPrefillStats prefill_stats;
             bool                     header_sent = false;
             bool                     final_sent  = false;
             std::atomic<bool>        job_done{false};
@@ -632,6 +884,8 @@ void handle_chat(httplib::Response& res, const json& body) {
         st->id       = id;
         st->smpl     = smpl;
         st->prompt_tokens = prompt;
+        st->slot     = slot;
+        st->prefill_stats = prefill_stats;
         st->emit     = { &st->emitter, &st->stream, {}, 0 };
         st->emit.deadline = deadline;
         st->emitter.strip_think = !think_enabled;
@@ -639,15 +893,13 @@ void handle_chat(httplib::Response& res, const json& body) {
         // generation runs on the engine thread; provider drains as chunks
         submit_job([st, &eng, n_gen, temperature]() {
             long long n =
-                eng.ss_depth > 0 && temperature <= 0.0f
-                    ? generate_selfspec(eng, st->prompt_tokens, eng.ss_depth,
-                                        n_gen, st->emit, st->finish_reason)
-                : eng.mtp_k > 0 && temperature <= 0.0f
+                eng.mtp_k > 0 && temperature <= 0.0f
                     ? generate_mtp(eng, st->prompt_tokens, n_gen, st->emit,
                                    &st->stream, st->finish_reason)
                     : generate_sequential(eng, st->prompt_tokens,
                                           st->smpl, n_gen, st->emit,
-                                          &st->stream, st->finish_reason);
+                                          &st->stream, st->finish_reason,
+                                          st->slot, &st->prefill_stats);
         // generation ran out of budget inside a suppressed think block:
         // surface the reason instead of an empty message
         if (st->emitter.truncated_in_think()) {
@@ -658,8 +910,16 @@ void handle_chat(httplib::Response& res, const json& body) {
                 std::to_string(n_gen) +
                 " tokens thinking; increase max_tokens or disable thinking]"));
         }
-        llama_memory_clear(llama_get_memory(eng.ctx), true);  // flush retained spec state
-            st->stream.finish(n >= 0 && st->finish_reason != "error");
+        if (!st->slot)
+            cne::session_clear_seq(eng.ctx, 0);
+        else if (st->prefill_stats.reused_tokens ||
+                 st->prefill_stats.prefilled_tokens)
+            fprintf(stderr,
+                    "[session] conv=%s reused=%zu prefilled=%zu prompt=%zu\n",
+                    eng.active_conv_id.c_str(), st->prefill_stats.reused_tokens,
+                    st->prefill_stats.prefilled_tokens,
+                    st->prompt_tokens.size());
+        st->stream.finish(n >= 0 && st->finish_reason != "error");
         });
 
         res.status = 200;
@@ -740,13 +1000,10 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::condition_variable gen_cv;
 
     submit_job([&]() {
-        n = eng.ss_depth > 0 && temperature <= 0.0f
-                ? generate_selfspec(eng, prompt, eng.ss_depth, n_gen, emit,
-                                    finish_reason)
-            : eng.mtp_k > 0 && temperature <= 0.0f
+        n = eng.mtp_k > 0 && temperature <= 0.0f
                 ? generate_mtp(eng, prompt, n_gen, emit, nullptr, finish_reason)
                 : generate_sequential(eng, prompt, smpl, n_gen, emit, nullptr,
-                                      finish_reason);
+                                      finish_reason, slot, &prefill_stats);
         std::lock_guard<std::mutex> l(gen_m);
         if (emitter.truncated_in_think()) {
             fprintf(stderr, "[server] WARNING: response truncated while "
@@ -762,7 +1019,8 @@ void handle_chat(httplib::Response& res, const json& body) {
     std::unique_lock<std::mutex> l(gen_m);
     gen_cv.wait(l, [&] { return gen_done; });
     llama_sampler_free(smpl);
-    llama_memory_clear(llama_get_memory(eng.ctx), true);
+    if (!slot)
+        cne::session_clear_seq(eng.ctx, 0);
 
     if (finish_reason == "error" || n < 0) {
         res.status = 500;
@@ -846,19 +1104,8 @@ int main(int argc, char** argv) {
     rs.stream_on =
         cne::env("STREAM") ? atoi(cne::env("STREAM")) != 0 : true;
 
-    if (const char* v = cne::env("SELF_SPEC")) g_engine.ss_depth = atoi(v);
-    if (const char* v = cne::env("DRAFT_MODEL")) g_engine.draft_path = v;
-    rs.draft_model_path = g_engine.draft_path.c_str();
     auto rt = cne::runtime_prepare(rs);
     if (!rt || !cne::runtime_load_llama(*rt, rs)) return 1;
-    if ((g_engine.ss_depth > 0) && !rt->draft_ctx) {
-        fprintf(stderr, "[selfspec] depth set but no drafter available - disabled\n");
-        g_engine.ss_depth = 0;
-    }
-    if (rt->draft_ctx) {
-        g_engine.ss_model = rt->draft_model;
-        g_engine.ss_ctx   = rt->draft_ctx;
-    }
     g_engine.mtp_k     = rt->mtp_k;
     g_engine.mtp_p_min =
         cne::env("MTP_P_MIN") ? (float)atof(cne::env("MTP_P_MIN")) : 0.0f;
@@ -896,15 +1143,16 @@ int main(int argc, char** argv) {
     if (const char* ct = cne::env("CHAT_TEMPLATE")) g_engine.chat_template = ct;
     if (cne::env("THINK") && strcmp(cne::env("THINK"), "0") == 0)
         g_engine.think_default = false;
+    if (cne::env("SESSION") && strcmp(cne::env("SESSION"), "0") == 0)
+        g_engine.sessions_enabled = false;
+    if (const char* sm = cne::env("SESSION_MAX")) {
+        const size_t n = (size_t) atoi(sm);
+        if (n > 0) g_engine.sessions = cne::SessionStore(n);
+    }
     if (const char* v = cne::env("MAX_REQ_S")) g_engine.max_req_s = atof(v);
-    if (const char* v = cne::env("SELF_SPEC")) g_engine.ss_depth = atoi(v);
-    if (const char* v = cne::env("DRAFT_MODEL")) g_engine.draft_path = v;
     if (g_engine.max_req_s > 0)
         fprintf(stderr, "[server] wall cap: %.0fs per request (CNE_MAX_REQ_S)\n",
                 g_engine.max_req_s);
-    if (g_engine.ss_depth > 0)
-        fprintf(stderr, "[selfspec] depth=%d drafter=%s\n", g_engine.ss_depth,
-                g_engine.draft_path.c_str());
 
     // handlers read engine state through the long-lived g_engine view
     g_engine.regime_str       = rt->regime_str;
@@ -934,6 +1182,15 @@ int main(int argc, char** argv) {
     g_engine.vocab            = rt->vocab;
     g_engine.n_ctx            = rt->n_ctx;
 
+    g_engine.sessions.set_seq_capacity(llama_n_seq_max(g_engine.ctx));
+    g_engine.n_ctx_per_seq = (int) llama_n_ctx_seq(g_engine.ctx);
+    init_api_state();
+    if (g_engine.sessions_enabled)
+        fprintf(stderr,
+                "[server] conversation KV reuse on (max %zu slots, %u seq "
+                "lanes; pass conversation_id per request)\n",
+                g_engine.sessions.max_slots(), llama_n_seq_max(g_engine.ctx));
+
     const int n_threads =
         cne::env("THREADS") ? atoi(cne::env("THREADS")) : 8;
 
@@ -959,8 +1216,27 @@ int main(int argc, char** argv) {
             {"streaming", g_engine.streaming},
             {"mtp", g_engine.mtp_k > 0 ? json(g_engine.mtp_k) : json(nullptr)},
             {"thinking_default", g_engine.think_default},
+            {"sessions", json{
+                {"enabled", g_engine.sessions_enabled},
+                {"active", g_engine.active_conv_id.empty()
+                               ? json(nullptr)
+                               : json(g_engine.active_conv_id)},
+                {"slots", g_engine.sessions.size()},
+                {"max_slots", g_engine.sessions.max_slots()},
+            }},
+            {"queue", json{
+                {"waiting", g_engine.queue_waiting.load()},
+                {"active", g_engine.decode_active.load()},
+            }},
             {"cache_cap_mib", g_engine.cache_cap >> 20},
-            {"n_ctx", g_engine.n_ctx}});
+            {"n_ctx", g_engine.n_ctx},
+            {"n_ctx_per_seq", g_engine.n_ctx_per_seq},
+            {"api", json{
+                {"enabled", g_api.settings.enabled},
+                {"rpm_per_user", g_api.settings.rpm_per_user},
+                {"session_max_per_user", g_api.settings.session_max_per_user},
+                {"keys_loaded", g_api.keys.size()},
+            }}});
     });
 
     svr.Get("/v1/models", [&](const httplib::Request&,
@@ -994,7 +1270,36 @@ int main(int argc, char** argv) {
                          "invalid_request_error"));
                      return;
                  }
-                 handle_chat(res, body);
+                 std::string conv_hdr;
+                 if (req.has_header("X-Conversation-Id"))
+                     conv_hdr = req.get_header_value("X-Conversation-Id");
+
+                 std::string api_user;
+                 if (g_api.settings.enabled) {
+                     const auto headers = collect_headers(req);
+                     const auto auth = cne::api::authenticate(
+                         headers, g_api.settings, g_api.keys,
+                         g_api.key_to_user);
+                     if (!auth.ok) {
+                         res.status = auth.http_status;
+                         set_json(res, error_body(auth.error,
+                             auth.http_status == 403
+                                 ? "permission_error"
+                                 : auth.http_status == 503
+                                       ? "server_error"
+                                       : "authentication_error"));
+                         return;
+                     }
+                     if (!g_api.limiter->allow(auth.user_id)) {
+                         res.status = 429;
+                         set_json(res, error_body(
+                             "rate limit exceeded (requests per minute)",
+                             "rate_limit_error"));
+                         return;
+                     }
+                     api_user = auth.user_id;
+                 }
+                 handle_chat(res, body, conv_hdr, api_user);
              });
 
     printf("cne-server: model=%s regime=%s dense=%s stream=%d mtp_k=%d "

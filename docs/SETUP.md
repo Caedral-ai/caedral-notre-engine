@@ -13,7 +13,7 @@ applied automatically; aborting at any point writes nothing.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
-      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON
+      -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build --target cne_prepare cne_setup cne_server -j
 ```
 
@@ -30,8 +30,13 @@ If you have a GGUF already, place it under `models/`. For the reference
 artifact:
 
 ```sh
-./tools/download-qwen3.6-35b-a3b-q4_k_xl.sh
+./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # reference model (~22.9 GB)
+./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B, no-stream profile (~14.4 GB)
 ```
+
+Both scripts verify sha256 and run the one-time alignment pass
+(`cne_prepare`). Prepared artifacts are listed first by `cne-setup` and
+marked `-prepared.gguf`. Per-model profiles: see `docs/models/`.
 
 The download script ends by running the one-time alignment pass
 (`cne_prepare`) that expert streaming requires. Prepared artifacts are
@@ -91,6 +96,11 @@ Accepted value grammars:
 | MTP draft depth | whole number >= 0 (0 = off) |
 | threads | whole number >= 1 |
 | context size | whole number >= 1 |
+| conversation lanes (`session_max`) | whole number 1–64; KV lanes + LRU cap on `conversation_id` |
+| API mode (`api_mode`) | on \| off; multi-user auth + `chat_id` tenancy |
+| sessions per user (`session_max_per_user`) | whole number 1–64; per-user LRU when API mode on |
+| API rate limit (`api_rpm`) | requests/minute per user; 0 = off |
+| internal keys file (`api_keys_file`) | path relative to models dir (gateway secret) |
 | expert cache cap | GiB number; empty or 0 = budget manager clamps |
 | thinking default | `on` \| `off` |
 | wall cap per request | seconds, 0 = off |
@@ -115,6 +125,13 @@ Suggestions come from measurements on the reference machine/hardware class
   stays off in R3+
 - **threads** - physical-core count beats SMT for both decode arms
 - **ctx 1024 floor** - MTP aborts near token ~250 below this
+- **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, kernels on,
+  4 threads, ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
+  `docs/models/lfm2-24b-a2b.md`
+- **conversation lanes** (`session_max`) - when MTP is off, typically 2 (3 on
+  comfortable RAM); 1 when MTP is on or memory is tight. Sets `CNE_SESSION_MAX`
+  and splits total `ctx` evenly across lanes (`ctx / session_max` tokens per
+  chat). Requires `mtp: 0` for multi-turn API use.
 
 You can override any of them; nothing changes model math silently.
 
@@ -124,19 +141,33 @@ Written where you pointed `--config` (default `models/server.json`):
 
 ```json
 {
-  "ctx": 1024,
+  "ctx": 4096,
   "dense": "mmap",
   "host": "127.0.0.1",
+  "kernels": true,
   "max_req_s": 0.0,
   "model": "qwen3.6-35b-a3b-q4_k_xl-mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL-prepared.gguf",
-  "mtp": 8,
-  "mtp_p_min": 0.5,
+  "mtp": 0,
   "port": 8080,
+  "session_max": 2,
+  "session_max_per_user": 2,
+  "api_mode": true,
+  "api_keys_file": "api_keys.txt",
+  "api_rpm": 120,
   "stream": false,
   "think": true,
   "threads": 4
 }
 ```
+
+With API mode, `cne_setup` can also write `models/api_keys.txt` (internal key for
+the gateway). Client-facing keys stay in `gateway/api_keys.local.txt` — see
+**docs/GATEWAY.md**.
+
+Example above is tuned for **multi-turn / multi-user chat** (`mtp: 0`,
+`session_max: 2` → 2048 tokens per parked conversation). For stateless MTP
+speed, use `"mtp": 8`, `"mtp_p_min": 0.5`, omit `session_max` or set it to
+`1`, and do not send `conversation_id` — see **docs/FEATURES.md** §5.
 
 Notes:
 
@@ -158,6 +189,7 @@ Every applied key is logged with its source at boot:
 
 ```
 [config] loaded models/server.json
+[config] KERNELS    = 1 (config)
 [config] MTP        = 8 (config)
 [config] THREADS    kept env override
 listening on http://127.0.0.1:8080 ...
@@ -175,11 +207,59 @@ curl http://localhost:8080/v1/chat/completions \
     -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":64}'
 ```
 
-Any OpenAI-compatible client works: point Open WebUI at the server as an
-"OpenAI API" connection, or configure opencode/n8n with base URL
+Any OpenAI-compatible client works locally: point Open WebUI at
 `http://127.0.0.1:8080/v1`.
 
-## 7. Troubleshooting
+For **multiple users on a public API**, do **not** expose `cne_server` on the
+internet. Use **`cne_gateway`** (client API keys) in front of API-mode
+`cne_server` on `127.0.0.1` — **docs/GATEWAY.md** and **docs/SERVING.md**.
+
+## 6b. API gateway (Path B)
+
+After `cne_setup` with API mode enabled (`api_mode`, `session_max_per_user`,
+`api_rpm`, `api_keys_file` in `models/server.json`):
+
+```sh
+# engine (reads models/server.json; bind 127.0.0.1 in production)
+./build/server/cne_server
+
+# gateway — copy examples, edit keys, then:
+cp gateway/gateway.json.example gateway/gateway.json
+cp gateway/api_keys.example.txt gateway/api_keys.local.txt
+./tools/scripts/run-gateway.sh
+```
+
+| File | Purpose |
+|---|---|
+| `models/server.json` | Engine knobs + `api_mode` |
+| `models/api_keys.txt` | **Internal** key (gateway → engine only) |
+| `gateway/gateway.json` | Gateway listen port, upstream, internal key |
+| `gateway/api_keys.local.txt` | **Client** keys (`<key> <user_id>` per line) |
+
+Clients call `http://<gateway>:8090/v1/...` with
+`Authorization: Bearer <client-api-key>` and `X-Chat-Id` (or JSON `chat_id`).
+
+Install gateway deps once: `cd gateway && python -m venv .venv && pip install -r requirements.txt`.
+
+## 7. Automated live tests
+
+With the LFM2 artifact on disk:
+
+```sh
+ctest --test-dir build -R server_e2e_live --output-on-failure
+ctest --test-dir build -R 'server_api_live|server_api_per_user_live' --output-on-failure
+```
+
+Gateway live test (needs `gateway/.venv` + `pip install -r requirements.txt`):
+
+```sh
+ctest --test-dir build -R server_gateway_live --output-on-failure
+```
+
+Edit env knobs in `tests/e2e/*.json` instead of exporting long `CNE_*` lists.
+Full matrix: **docs/TESTING.md**.
+
+## 8. Troubleshooting
 
 | Symptom | Meaning | Fix |
 |---|---|---|

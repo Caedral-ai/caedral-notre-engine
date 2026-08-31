@@ -3,3 +3,7 @@ add_executable(cne_test_memory_budget test_memory_budget.cpp)
 target_link_libraries(cne_test_memory_budget PRIVATE cne_core)
 target_compile_features(cne_test_memory_budget PRIVATE cxx_std_17)
 add_test(NAME memory_budget COMMAND cne_test_memory_budget)
+
+add_executable(cne_test_kv_budget test_kv_budget.cpp)
+target_link_libraries(cne_test_kv_budget PRIVATE cne_core)
+add_test(NAME kv_budget COMMAND cne_test_kv_budget)

@@ -29,10 +29,14 @@ if(CNE_WITH_LLAMA)
     set(LLAMA_BUILD_UI       OFF)
     # `common` is needed by tools that wire upstream speculative decoding
     # (common_speculative draft-mtp). Library-only discipline for the product
-    # core is unchanged: cne_core/cne_adapter never link it.
+    # core is unchanged: cne_core/cne_runtime never link it.
     set(LLAMA_BUILD_COMMON   ON)
     add_subdirectory(third_party/llama.cpp)
-    add_subdirectory(adapters)
+    add_subdirectory(runtime)
+endif()
+
+if(CNE_BUILD_SERVER)
+    add_subdirectory(server)
 endif()
 
 if(CNE_BUILD_TESTS)
@@ -42,10 +46,6 @@ endif()
 
 if(CNE_BUILD_TOOLS)
     add_subdirectory(tools)
-endif()
-
-if(CNE_BUILD_SERVER)
-    add_subdirectory(server)
 endif()
 
 if(CNE_BUILD_CLI)

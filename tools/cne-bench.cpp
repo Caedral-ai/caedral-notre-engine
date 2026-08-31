@@ -3,7 +3,7 @@
 // ask-point. Reports tok/s, hit-rate, cold MiB/step, evictions - comparable
 // against offline LRU simulation curves.
 //
-// The demand-serving runtime lives in adapters/stream_cb.cpp behind the
+// The demand-serving runtime lives in runtime/cne_stream_cb.cpp behind the
 // cne_stream_cb.h API; this file is only a measurement driver.
 #include "cne/cache.h"
 #include "cne/io_scheduler.h"
@@ -173,8 +173,7 @@ int main(int argc, char** argv) {
         printf("\n");
     }
     if (R.mtp_k > 0) {
-        // MTP path below does its own two-phase prefill (n-1 tokens, then
-        // the last token together with the first verify batch).
+        // Speculative paths below do their own prefill.
     } else if (cne::env("SPLIT_PREFILL")) {
         // Bisect knob: same two-phase prefill shape as the MTP path
         // (n-1 tokens, then 1) WITHOUT any speculation.
@@ -222,10 +221,11 @@ int main(int argc, char** argv) {
         FILE* lf = fopen(lp, "wb");
         if (lf) { fwrite(lg, sizeof(float), nv, lf); fclose(lf); }
     };
+    const bool ignore_eos = cne::env("IGNORE_EOS") != nullptr;
     for (int i = 0; i < n_gen; i++) {
-        if (R.mtp_k > 0) break;   // MTP path below owns generation
+        if (R.mtp_k > 0) break;   // spec paths own generation
         llama_token id = llama_sampler_sample(smpl, R.ctx, -1);
-        if (llama_vocab_is_eog(R.vocab, id)) break;
+        if (!ignore_eos && llama_vocab_is_eog(R.vocab, id)) break;
         printf(" %d", id);
         fflush(stdout);
         produced++;

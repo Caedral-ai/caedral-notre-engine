@@ -1,0 +1,22 @@
+{
+  "description": "LFM2 big-context session E2E at ctx=8192",
+  "model": "models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf",
+  "env": {
+    "CNE_SESSION_MAX": "1",
+    "CNE_STREAM": "0",
+    "CNE_CTX": "8192",
+    "CNE_TEST_CTX": "8192",
+    "CNE_TEST_PROMPT_TOK": "7000",
+    "CNE_TEST_GEN": "16"
+  },
+  "runtime": {
+    "cap_gib": 0,
+    "n_ctx": 8192,
+    "n_threads": 4,
+    "stream_on": false
+  },
+  "options": {
+    "prompt_tokens": 7000,
+    "gen_tokens": 16
+  }
+}

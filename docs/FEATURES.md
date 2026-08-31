@@ -15,7 +15,7 @@ Quick decision table:
 | Model about the size of RAM | fault-free decode, bounded memory | anon-dense residency + budget manager |
 | Model 1-4x RAM | cache hot experts, stream cold ones | expert streaming + O_DIRECT |
 | Model 4-8x+ RAM | full streaming pipeline | expert streaming (core regime) |
-| Generation feels slow but memory is fine | draft multiple tokens per step | draft-MTP speculation |
+| Generation feels slow but memory is fine | draft multiple tokens per step | draft-MTP speculation (Qwen3.6 only) |
 | You accept a quality trade for speed | skip low-weight experts | expert-mass gating (lossy, opt-in) |
 | You want to verify quality yourself | measure perplexity directly | engine-ppl mode |
 
@@ -147,6 +147,27 @@ lossless configuration measured on this hardware class.
 
 **Avoid when:** serving multiple concurrent requests — draft overhead does
 not parallelize as well as plain decode.
+
+**Incompatible with conversation sessions (`conversation_id`).** On
+`cne_server`, MTP and multi-turn KV reuse are **mutually exclusive** — pick
+one per deployment (`CNE_MTP=0` for chat sessions; unset `conversation_id`
+when MTP is on). When `CNE_MTP>0`, the server ignores `conversation_id` and
+runs stateless (full prefill + KV clear every request). Reasons:
+
+1. **Two KV caches** — MTP keeps target and draft contexts in sync; session
+   reuse only tracks the target. Resuming a chat would leave the drafter on
+   stale state.
+2. **KV rollbacks** — MTP trims rejected draft tails with `seq_rm` and
+   checkpoints mid-generation; sessions assume a stable prefix that only
+   grows (or trims on history edit).
+3. **Separate code paths** — `spec_mtp_generate()` always full-prefills;
+   it does not call incremental `session_prefill()`.
+4. **Serving hazard** — upstream draft-MTP can degrade across back-to-back
+   requests (#26425); sessions intentionally retain KV, which would compound
+   that risk.
+
+A combined MTP+sessions mode is possible later (draft sync + parity tests);
+not supported in v1. See also §11 (server sessions).
 
 **Streaming interaction (measured 2026-08-24 at ~1.4x RAM):** speculation's
 advantage decays as cache hit-rate drops, for three reasons:
@@ -281,6 +302,42 @@ These exist for engine work, not for end users:
 | `CNE_STEP_FILLS`, `CNE_FULL_FILL` | fill telemetry / whole-window fill probe |
 | `CNE_LAYER_LIMIT` | restrict demand-serving to N layers (bisecting) |
 | `CNE_SPLIT_PREFILL`, `CNE_MTP_NODRAFT` | prefill-shape and draft-isolation bisects |
+| `CNE_IGNORE_EOS` | bench-only: keep generating after EOS for fixed-length throughput runs (does not change model math; not for serving) |
+| `CNE_KERNELS` | CNE custom ggml-cpu kernels in `repack.cpp` (default **on**). `1` = fork fast path (q8 activation cache, MoE `mul_mat_id` dispatch, fused q4/q6 `2vx`/`4vx` GEMV). `0` = stock llama.cpp path; same tokens, for A/B. Measured **+10.6%** on `llama-bench` tg250 (5 runs/arm, i5-1135G7, t4). Scripts: `bench/scripts/lfm2/tg128-microbench.sh`, `server-velocity.sh`. See **§ Custom kernels — compatibility** below. |
+
+### Custom kernels (`CNE_KERNELS`) — compatibility
+
+One toggle controls all fork hooks in `ggml-cpu/repack.cpp`. Tokens stay
+identical whether on or off; only the CPU kernel path changes.
+
+**Validated:** LFM2-24B-A2B prepared Q4_K_M (+10.6% tg250 vs `CNE_KERNELS=0`).
+
+**Likely compatible** (same top-4 MoE `mul_mat_id` pattern; not bench'd here yet):
+
+- **LFM2 MoE variants** — `lfm2moe` arch, e.g. LFM2-8B-A1B, LFM2.5-8B-A1B
+- **SmallThinker MoE** — `smallthinker` arch, `expert_used_count=4`, separate gate/up/down tensors
+
+Run `cne_identity_gate` on any new artifact before velocity claims.
+
+**Does not run** (falls back to stock llama `mul_mat_id`):
+
+- `CNE_KERNELS=0`, or build without the `cne/cpu-kernels` fork
+- GPU inference (CUDA / Metal / Vulkan) — CPU repack hooks are not used
+- Prefill / multi-token batches — fast path requires single-token decode (`ne11==1`, `ne12==1`)
+- MoE top-K other than 2 or 4
+- `GGML_CPU_REPACK` off, or non-repacked weight layouts
+
+**Runs with partial gain** (dispatch + q8 activation cache; no fused AVX2 `4vx`):
+
+- x86 CPUs without AVX2 at compile time
+- ARM / Apple Silicon, RISC-V, POWER, generic CPU builds
+
+**Full fused SIMD** (measured +10.6% tg250 vs `CNE_KERNELS=0`):
+
+- x86_64 + AVX2, fork build with `GGML_CPU_REPACK=ON`, `CNE_KERNELS=1`
+- LFM2-24B-A2B prepared Q4_K_M (or other likely-compatible MoE above), CPU-only decode
+
+Model-specific detail and decision tree: [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Compatibility.
 
 Build-time debug machinery: configure with **`-DCNE_AUDIT=ON`** to compile
 in the slice-corruption audit (per-fill records verified at the consuming
@@ -303,7 +360,7 @@ Whichever features you enable or disable:
 
 ## 11. OpenAI-compatible server (`cne_server`)
 
-**Status:** working (single session) · **Built with:** `-DCNE_BUILD_SERVER=ON`
+**Status:** working (single context; optional multi-turn KV reuse) · **Built with:** `-DCNE_BUILD_SERVER=ON`
 
 Serving endpoint on the same runtime the bench measures - identical regime
 classification, budget clamp, and demand-serving path.
@@ -312,7 +369,7 @@ classification, budget clamp, and demand-serving path.
 |---|---|
 | `POST /v1/chat/completions` | OpenAI format; `"stream": true` for SSE; `temperature`/`top_p`/`seed` passthrough; greedy default = lossless |
 | `GET /v1/models` | single-model list |
-| `GET /health` | regime, dense policy, streaming, MTP depth, ctx, cache cap |
+| `GET /health` | regime, dense policy, streaming, MTP depth, ctx, cache cap, **sessions**, **queue** |
 
 Server-specific knobs:
 
@@ -320,17 +377,63 @@ Server-specific knobs:
 |---|---|
 | `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
 | `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
+| `CNE_KERNELS=0` | stock llama.cpp ggml-cpu path (A/B); default on when unset |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
+| `CNE_SESSION=0` | disable conversation KV reuse (default on when `conversation_id` is sent) |
+| `CNE_SESSION_MAX=N` | LRU cap on tracked conversations; also sets `n_seq_max` KV lanes at boot (default 8 if unset; `cne_setup` usually suggests 2) |
+| `CNE_KV_BPT=N` | KV bytes/token estimate for boot warnings (default ~20480) |
+
+| `CNE_API_MODE` | `1` | Enable API key auth + `chat_id` tenancy |
+| `CNE_API_KEY` | secret | Single development key |
+| `CNE_API_KEYS` | `k1,k2` | Comma-separated keys |
+| `CNE_API_KEYS_FILE` | path | One key per line (`key` or `key user_id`) |
+| `CNE_API_RPM` | N | Per-user requests/minute (0 = off) |
+| `CNE_SESSION_MAX_PER_USER` | N | Max parked chats per user (default 2 in API mode) |
+
+Config file keys: `api_mode`, `api_keys` (array), `api_keys_file`, `api_rpm`,
+`session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
+for the two-tier key model (internal vs client keys).
+
+**Public API:** run **`cne_gateway`** in front of API-mode `cne_server` on
+`127.0.0.1`. Clients never call `cne_server` directly. Gateway docs:
+**docs/GATEWAY.md** · serving architecture: **docs/SERVING.md**.
+
+Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
+field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
+tail; logs `[session] reused=N prefilled=M`. Different users can share one
+server (requests still serialize); each `conversation_id` keeps its own KV
+lane until global LRU eviction. Omit `conversation_id` for stateless behavior
+(seq 0 only, cleared after each request). `clear_conversation: true` drops
+cached KV for that id.
+
+**Context lanes:** total `ctx` is split **evenly** at boot
+(`per_lane = ctx / session_max`). Unused tokens in one chat are not given to
+another. There is no server-side auto-truncate or summarize when a lane fills
+— clients (or your API proxy) must trim the `messages` they send. If a user
+opens more distinct `conversation_id`s than `session_max`, the least recently
+used conversation is evicted (any user). There is no per-tenant isolation in
+v1; see **docs/SERVING.md** for API-layer mitigations and the engine roadmap.
+
+**Decode:** one request at a time (`gen_mutex`); multiple users are not batched
+into one forward pass. `session_max` parks KV only.
+
+**Requires `CNE_MTP=0` (or unset).** Sessions and draft-MTP cannot be
+combined on the server — see §5 for why. Use sequential decode for
+multi-turn or multi-user chat; use MTP only for stateless single-shot
+requests.
 
 The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >
 built-in default, and every resolved knob is logged with its source at
-boot. See **docs/SETUP.md**.
+boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
+`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`. See **docs/SETUP.md**.
 
 Behavior notes:
 
-- Requests serialize (single-decode runtime); a client disconnecting
+- Requests serialize (single-decode runtime); `/health` reports
+  `queue.waiting` and `queue.active`. Waits over 50ms log `[queue]`.
+- A client disconnecting
   mid-stream stops generation cleanly - the socket is polled for liveness
   instead of trusting write() alone, so abandoned requests cannot hog the
   engine slot.
@@ -342,3 +445,11 @@ Behavior notes:
   system prompts (several thousand tokens) are safe. Size `ctx` to your
   workload; context costs ~20 KiB/token on hybrid-attention artifacts,
   plus KV headroom for generation.
+
+**Live tests:** `server_e2e_live` forks this binary and checks
+`/v1/chat/completions` plus session KV reuse. Config and `ctest` commands:
+**docs/TESTING.md**.
+
+**Multi-user API:** auth, quotas, fair session eviction, and client context
+policy are documented in **docs/SERVING.md** (operate with a proxy now; tenant
+sessions planned in-engine).

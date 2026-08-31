@@ -1,0 +1,19 @@
+{
+  "description": "HTTP E2E — API mode (auth, chat_id, per-user sessions)",
+  "model": "",
+  "env": {
+    "CNE_MTP": "0",
+    "CNE_STREAM": "0",
+    "CNE_CTX": "2048",
+    "CNE_SESSION_MAX": "3",
+    "CNE_API_MODE": "1",
+    "CNE_API_KEY": "e2e-test-secret",
+    "CNE_SESSION_MAX_PER_USER": "2",
+    "CNE_API_RPM": "120"
+  },
+  "chat": {
+    "max_tokens": 12,
+    "think_off": true
+  },
+  "boot_timeout_s": 180
+}
