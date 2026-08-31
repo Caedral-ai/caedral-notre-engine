@@ -132,3 +132,27 @@ flash/token, hit-rate) from the benchmark protocol.
   x86 `4vx`/`2vx` are generic today — native AVX-VNNI fusion is the next
   kernel milestone (see `docs/models/lfm2-24b-a2b.md` § Kernel roadmap).
 - Prefer vendored/minimal deps; no heavyweight frameworks in core.
+
+## 8. Build without model downloads
+
+A default `cmake -B build` needs the pinned llama.cpp submodule:
+
+```sh
+git submodule update --init --recursive
+```
+
+Do not commit GGUF files. Download scripts under `tools/scripts/` fetch
+multi-gigabyte artifacts; they are optional and not required to compile.
+
+`cmake -B build` with an empty `third_party/llama.cpp` fails. Core-only
+configure (`-DCNE_WITH_LLAMA=OFF -DCNE_BUILD_TESTS=OFF -DCNE_BUILD_TOOLS=OFF`)
+does not exercise the inference kernel.
+
+## 9. Conduct and security
+
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1
+- [SECURITY.md](SECURITY.md) — report vulnerabilities to security@caedral.com
+  (see also [caedral.com/security](https://caedral.com/security))
+- Never open public issues that contain API keys, `server.json` secrets, or
+  customer prompts
+

@@ -25,9 +25,23 @@ speculative decoding live in a dedicated layer outside it.*
 
 ---
 
-> **Status: pre-alpha.** Streaming pipeline, serving layer and the first-run
+> **Status: PRE-ALPHA.** Streaming pipeline, serving layer and the first-run
 > setup CLI are working end-to-end; hardening and user-facing profiles are
-> next. See [Roadmap](#roadmap).
+> next. This is research software, not a production inference product.
+> See [Limitations](#limitations) and [Roadmap](#roadmap).
+
+**Notre Engine** (`cne`) is a **PRE-ALPHA local CPU Mixture-of-Experts
+inference engine** in the [Notre research program](#notre-research-program).
+It is not the Caedral API, not a hosted model endpoint, and not an
+automation-agency product.
+
+[Caedral](https://caedral.com) is a **unified AI API**: monthly subscription
+plans with included usage pools (Caedral Models and external labs) and
+optional on-demand overage. Notre Engine is separate: run MoE GGUF artifacts
+on a machine you control, CPU-only, with explicit memory budgets.
+
+Repository: [Caedral-ai/caedral-notre-engine](https://github.com/Caedral-ai/caedral-notre-engine)
+(MIT). Security: [SECURITY.md](SECURITY.md). Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Why
 
@@ -199,11 +213,18 @@ internal-docs/             private kernel/ops research (separate git repo, gitig
 
 ## Quick start
 
-Requirements: Linux, CMake ≥ 3.16, C++17 compiler, ~50 GB free disk for the
-reference model.
+Requirements: Linux, CMake ≥ 3.16, C++17 compiler. Reference GGUF artifacts
+are large (~15–23 GB each; plan ~50 GB free if you download them). **You do
+not need models to configure or compile the engine.**
 
 ```sh
-# build (include tests + server + setup for live E2E)
+# clone with the pinned llama.cpp kernel (required for a default build)
+git clone --recurse-submodules https://github.com/Caedral-ai/caedral-notre-engine.git
+cd caedral-notre-engine
+# if you already cloned without submodules:
+git submodule update --init --recursive
+
+# configure + build (include tests + server + setup for live E2E)
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
       -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=ON -DCNE_BUILD_TESTS=ON
 cmake --build build -j
@@ -379,6 +400,36 @@ ctest --test-dir build -R server_gateway_live --output-on-failure       # + gate
 
 See **[docs/TESTING.md](docs/TESTING.md)**.
 
+## Limitations
+
+PRE-ALPHA. Treat the following as **current engine constraints**, not a
+roadmap slogan:
+
+| Constraint | What that means today |
+|---|---|
+| **One decode slot** | Requests serialize (`gen_mutex`). There is no multi-user batching into one forward pass. `/health` reports `queue.*`. |
+| **No tenant isolation in the engine** | `cne_server` is a single-process runtime. API mode + `cne_gateway` map keys to `user_id` and park KV lanes; they do **not** provide hypervisor-style isolation, per-tenant memory firewalls, or cross-tenant cryptographic separation. Do not expose `cne_server` on a public interface. |
+| **No multi-user batching** | Several users share one queue and one model. `session_max` only parks KV; it does not run concurrent decode. |
+| **MTP vs multi-turn KV** | Draft-MTP (`CNE_MTP>0`) and `conversation_id` sessions are **mutually exclusive**. MTP needs dual contexts and mid-step KV rollbacks that session bookkeeping does not track. Pick sequential decode for chat; pick MTP for stateless single-shot speed. See [docs/FEATURES.md](docs/FEATURES.md) §5. |
+| **Mixed-precision is not default** | Lossless output is the default contract. Mixed-precision miss serving is a planned **opt-in lossy** profile (roadmap), not on unless you enable a lossy flag. Expert-mass gating is the existing lossy opt-in; it stays off unless set. |
+| **Single model per process** | One engine process loads one artifact. |
+| **CPU-only, Linux-first** | No GPU offload; Windows/macOS are non-goals for this stage. |
+| **Not Caedral production** | This binary is not the unified Caedral API. Hosted Caedral inference, billing, and tenant isolation live in the Caedral platform — not here. |
+
+## Notre research program
+
+Notre is a Caedral research program, not a single product repo:
+
+| Project | Role | Status |
+|---|---|---|
+| **Notre Engine** (this repo) | Local CPU MoE inference (`cne`) | **PRE-ALPHA** |
+| **Notre MCP / runtime** | Context compiler, capability runtime, MCP transport | Active development (separate repository) |
+| **Notre DB** | AI-native persistent state (PostgreSQL-first) | **In development** (RFC; no standalone product yet) |
+
+Notre MCP is **not** “the Notre product.” MCP is a transport and local tool
+surface. The Caedral API remains the customer-facing unified API
+([caedral.com](https://caedral.com)).
+
 ## Roadmap
 
 1. Streaming pipeline, budget manager, regime classification, tooling — **done**
@@ -400,8 +451,12 @@ Non-goals: GPU offloading, training/fine-tuning, dense-model optimization
 
 <div align="center">
 
-Part of the [Caedral](https://caedral.com) ecosystem —
-prepaid AI infrastructure for automation agencies.
+Part of the [Caedral](https://caedral.com) Notre research program.
+
+Caedral is a unified AI API — subscription plans, included usage pools, and
+optional on-demand overage. Notre Engine is a PRE-ALPHA local CPU MoE
+inference engine. They are related research and product lines, not the same
+thing.
 
 MIT — see [LICENSE](LICENSE).
 
