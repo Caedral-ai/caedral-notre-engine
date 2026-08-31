@@ -80,10 +80,17 @@ CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
 
-# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2): ~9.1 tok/s, 97% hit
-CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_LANES=2 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2, prefetch off): ~11.1 tok/s, 97% hit
+CNE_STREAM=1 CNE_CACHE_GIB=3 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=2 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+
+# 2 GiB cache — not recommended (~4.7 tok/s, 83% hit)
+CNE_STREAM=1 CNE_CACHE_GIB=2 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=4 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 2 250 250 1
 ```
 
 See [docs/models/lfm2.5-8b-a1b.md](../docs/models/lfm2.5-8b-a1b.md) for serving knobs.

@@ -19,22 +19,25 @@ if [[ ! -f "$MODEL" ]]; then
 fi
 
 if [[ ! -s "$TSV" ]]; then
-  printf 'run_ts\tprofile\tstream\tcap_gib\tdense\tctx\ttok_s\trss_gib\thit_pct\n' >"$TSV"
+  printf 'run_ts\tprofile\tstream\tcap_gib\tdense\tctx\tlanes\ttok_s\trss_gib\thit_pct\n' >"$TSV"
 fi
 
 run_case() {
-  local name=$1 stream=$2 cap=$3 dense=$4 ctx=$5 rebind=$6
+  local name=$1 stream=$2 cap=$3 dense=$4 ctx=$5 rebind=$6 lanes=${7:-4}
   local out tok rss hit
-  echo "=== $name (stream=$stream cap=${cap}GiB dense=$dense ctx=$ctx) ==="
-  out=$(CNE_STREAM=$stream CNE_DENSE=$dense CNE_KERNELS=1 CNE_THREADS=4 \
-        CNE_CTX=$ctx CNE_SESSION_MAX=1 CNE_IGNORE_EOS=1 \
+  echo "=== $name (stream=$stream cap=${cap}GiB dense=$dense ctx=$ctx lanes=$lanes) ==="
+  out=$(CNE_STREAM=$stream CNE_DENSE=$dense CNE_KERNELS=1 CNE_PREFETCH=0 \
+        CNE_THREADS=4 CNE_LANES=$lanes CNE_CTX=$ctx CNE_SESSION_MAX=1 \
+        CNE_IGNORE_EOS=1 \
         ./build/tools/cne_bench "$MODEL" "$cap" "$N_GEN" "$N_GEN" "$rebind" 2>&1) || true
   tok=$(sed -n 's/^tok\/s *: //p' <<<"$out" | tail -1)
-  rss=$(sed -n 's/.*rss=\([0-9.]*\) GiB.*/\1/p' <<<"$out" | tail -1)
+  rss=$(sed -n 's/.*hwm=\([0-9.]*\) GiB.*/\1/p' <<<"$out" | tail -1)
+  [[ -z "$rss" ]] && rss=$(sed -n 's/.*rss=\([0-9.]*\) GiB.*/\1/p' <<<"$out" | tail -1)
   hit=$(sed -n 's/^cache hit rate *: \([0-9.]*\)%.*/\1/p' <<<"$out" | tail -1)
   [[ -z "$hit" ]] && hit="0"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(date -Iseconds)" "$name" "$stream" "$cap" "$dense" "$ctx" "$tok" "$rss" "$hit" >>"$TSV"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -Iseconds)" "$name" "$stream" "$cap" "$dense" "$ctx" "$lanes" \
+    "$tok" "$rss" "$hit" >>"$TSV"
   echo "$out" | tail -8
   echo
 }
@@ -43,16 +46,17 @@ RUN_TS=$(date -Iseconds)
 echo "=== LFM2.5 memory profile $RUN_TS ==="
 
 # Phase 2 baseline (plan): no stream
-run_case "baseline-mmap" 0 0 mmap 2048 0
+run_case "baseline-mmap" 0 0 mmap 2048 0 4
 
 # 4 GiB target: dense anon (no stream) — mmap drop + per-step expert trim
-run_case "anon-4g-nostream" 0 0 anon 1024 0
+run_case "anon-4g-nostream" 0 0 anon 1024 0 4
 
-# 4 GiB target: dense anon + 3 GiB expert cache (stream)
-run_case "anon-4g-stream3g" 1 3 anon 1024 1
+# 4 GiB target: dense anon + expert cache (stream), kernels on, prefetch off
+run_case "anon-4g-stream3g-l2" 1 3 anon 1024 1 2
+run_case "anon-4g-stream2g-l4" 1 2 anon 1024 1 4
 
 # Legacy stream probes (UD-Q4_K_XL without anon drop — not 4 GiB safe)
-run_case "stream-1g-mmap" 1 1 mmap 1024 1
+run_case "stream-1g-mmap" 1 1 mmap 1024 1 4
 
 echo "results -> $TSV"
-column -t "$TSV" | tail -6
+column -t "$TSV" | tail -8

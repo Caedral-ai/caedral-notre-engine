@@ -192,23 +192,19 @@ AtomicChat UD-Q4_K_XL, no MTP. Full profile:
 | 16 GiB — mmap-dense, stream off | ~4.94 GiB | **~18** | ctx 2048, t4 |
 | mmap + stream 1 GiB (legacy) | ~6.2 GiB | ~1.9 | do not use for 4 GiB |
 
-**250-token sustained decode** (`cne_bench`, greedy, `CNE_IGNORE_EOS=1`):
+**250-token sustained decode** (`cne_bench`, greedy, `CNE_IGNORE_EOS=1`,
+`CNE_KERNELS=1`, `CNE_PREFETCH=0`):
 
-| profile | RSS (HWM) | tok/s | wall | notes |
+| profile | RSS (HWM) | tok/s | hit % | notes |
 |---|---|---|---|---|
-| **anon, stream off, t4 ctx 1024** | **2.89 GiB** | **11.1** | 22.5 s | **4 GiB tuned** |
-| mmap-dense, stream off, t4 ctx 2048 | 4.96 GiB | **12.0** | 20.8 s | **16 GiB+ tuned** |
-| anon, stream on, 3 GiB, **t4 lanes 2** | 3.87 GiB | **9.06** | 27.6 s | tuned streaming |
-| anon, stream on, 3 GiB, t4 (default) | 3.87 GiB | 7.41 | 33.7 s | 96.9% hit |
+| **anon, stream off, t4 ctx 1024** | **2.89 GiB** | **11.1** | — | **4 GiB tuned** |
+| mmap-dense, stream off, t4 ctx 2048 | 4.96 GiB | **12.0** | — | **16 GiB+ tuned** |
+| anon, stream on, **3 GiB**, t4 **lanes 2** | **4.31 GiB** | **11.14** | **96.9** | tuned streaming |
+| anon, stream on, **2 GiB**, t4 lanes 4 | 3.65 GiB | 4.65 | 82.9 | below 90% rule |
 
-**No-stream thread sweep** (250 tok): anon t2 8.4 · **t4 11.1** · t6 10.4 · t8
-**6.0** (avoid). mmap t2 9.3 · **t4 12.0** · t6 10.4 · t8 **4.5** (avoid).
-**Anon ctx sweep** (t4): 512 7.4 · **1024 11.1** · 2048 9.9 · 4096 8.4.
-**Mmap ctx sweep** (t4): 1024 7.7 · **2048 12.0** · 4096 8.4.
-
-**Streaming thread sweep** (3 GiB cache, `CNE_LANES=4`): t2 7.50 ·
-**t4 7.84** · t6 7.75 · t8 **3.00** (avoid). **Lane sweep** (t4): lanes 1 8.69 ·
-**2 9.06** · 4 8.99 · 8 9.00.
+**Expert cache sweep** (stream on, anon, t4, ctx 1024, 250 tok): **3 GiB /
+lanes 2 → 11.14 tok/s** (97% hit) vs **2 GiB / lanes 4 → 4.65 tok/s** (83% hit).
+Full table: [models/lfm2.5-8b-a1b.md](models/lfm2.5-8b-a1b.md) §5.
 
 **Kernel A/B** (`llama-bench` tg250, t4, pp512, 5 reps, `CNE_STREAM=0`):
 
@@ -232,10 +228,17 @@ CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
 
-# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2): ~9.1 tok/s, ~3.9 GiB peak
-CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_LANES=2 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2, prefetch off): ~11.1 tok/s, ~4.3 GiB peak
+CNE_STREAM=1 CNE_CACHE_GIB=3 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=2 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+
+# 2 GiB stream cache — not recommended (~4.7 tok/s, 83% hit)
+CNE_STREAM=1 CNE_CACHE_GIB=2 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=4 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 2 250 250 1
 
 # 16 GiB+ — mmap, no stream, tuned (t4, ctx 2048): ~12.0 tok/s
 CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_EOS=1 \
