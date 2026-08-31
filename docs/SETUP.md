@@ -94,6 +94,7 @@ Accepted value grammars:
 | Setting | Values |
 |---|---|
 | stream decode | `on` \| `off` |
+| prefetch overlap (`prefetch`) | `on` \| `off`; streaming only — maps to `CNE_PREFETCH` (default off) |
 | dense residency | `mmap` \| `warm` \| `anon` \| empty = engine auto |
 | MTP draft depth | whole number >= 0 (0 = off) |
 | threads | whole number >= 1 |
@@ -119,6 +120,8 @@ Suggestions come from measurements on the reference machine/hardware class
 
 - **stream off** below R3 - the expert cache already holds the hot set;
   naive mmap decode measured equal-or-better there
+- **prefetch off** — speculative expert I/O overlap during streaming;
+  default off (measured neutral/regressive); only applies when `stream` is on
 - **dense mmap** when MTP is active - measured win under speculation-era
   memory footprints
 - **MTP 8** (p_min 0.5) when the artifact carries MTP tensors AND the
@@ -179,6 +182,8 @@ speed, use `"mtp": 8`, `"mtp_p_min": 0.5`, omit `session_max` or set it to
 Notes:
 
 - `model` is relative to the config file's directory
+- `prefetch` is omitted when off (engine default); requires `"stream": true`
+  to have any effect — maps to `CNE_PREFETCH=1` / `lookahead`
 - keys left at engine default are omitted entirely - every key present in
   the file traces back to a choice you confirmed
 

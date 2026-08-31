@@ -233,8 +233,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=
 cmake --build build --target cne_server cne_setup -j
 
 # first run: detect hardware, preview the regime, confirm every setting
-# interactively (or -y to accept the suggestions). Writes models/server.json;
-# aborting writes nothing.
+# interactively (or -y to accept the suggestions). Writes models/server.json
+# (stream, prefetch, kernels, ctx, sessions, …); aborting writes nothing.
 ./build/cli/cne_setup
 
 # boot with zero env vars - the confirmed config drives everything
@@ -325,6 +325,7 @@ Live stack: `ctest --test-dir build -R server_gateway_live --output-on-failure`
 | Variable | Values | Effect |
 |---|---|---|
 | `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime). **`anon`** on 4 GiB MoE hosts: private dense copy + expert mmap trim (see **docs/models/lfm2.5-8b-a1b.md**) |
+| `CNE_PREFETCH` | `1` \| `lookahead` \| `full` | speculative expert prefetch during **streaming** (default off); see **docs/FEATURES.md** §9 |
 | `CNE_DENSE_DROP_MMAP` | `0` \| unset | unset = drop file-backed RSS after `anon` bind (default on); `0` = debug / A/B only |
 | `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
 | `CNE_LANES` | N | parallel O_DIRECT slice-read workers (default 4); **use 2** for LFM2.5 stream+anon @ 3 GiB |

@@ -59,6 +59,7 @@ const ConfigKnob g_config_knobs[] = {
     {"api_mode", "API_MODE"},
     {"api_rpm", "API_RPM"},
     {"session_max_per_user", "SESSION_MAX_PER_USER"},
+    {"prefetch", "PREFETCH"},
 };
 
 // API keys from server.json (merged at boot); not injected as env.

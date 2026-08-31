@@ -249,7 +249,7 @@ Disable mmap drop (debug only): `CNE_DENSE_DROP_MMAP=0`.
 | `kernels` | on | |
 | `cache_gib` | 0 | stream off |
 
-Optional: `stream: on`, `cache_gib: 3`, `dense: anon`, `threads: 4`, env
+Optional: `stream: on`, `cache_gib: 3`, `prefetch: false` (default), `dense: anon`, `threads: 4`, env
 `CNE_LANES=2` for LRU expert residency (~**9.1 tok/s @ 250 tok**, ~3.9 GiB peak;
 still slower than tuned anon no-stream at **11.1 tok/s**).
 
@@ -259,6 +259,7 @@ Example `models/server.json` for **4 GiB + streaming** (multi-tenant / LRU):
 {
   "model": "lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf",
   "stream": true,
+  "prefetch": false,
   "cache_gib": 3,
   "dense": "anon",
   "ctx": 1024,

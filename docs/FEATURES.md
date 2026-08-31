@@ -281,14 +281,17 @@ numbers.
 **Avoid when:** comparing against numbers produced by different toolchains —
 absolute values are only comparable within the same harness and protocol.
 
-## 9. Prefetch overlap (`CNE_PREFETCH`)
+## 9. Prefetch overlap (`CNE_PREFETCH` / `prefetch`)
 
 **Status:** shipped, default OFF
 
-Speculatively fills expert slices for the next step using the previous
-step's routing. Measured as a no-op or regression on current hardware
-(adequate caching already captures routing locality, and the prefetcher
-contends with demand fills on the cache lock).
+Speculatively fills expert slices for the next decode step using the previous
+step's routing while **streaming** is on (`CNE_STREAM=1`). Measured as a no-op
+or regression on current hardware (adequate caching already captures routing
+locality, and the prefetcher contends with demand fills on the cache lock).
+
+**Config:** `"prefetch": true` in `models/server.json` (or `CNE_PREFETCH=1` /
+`lookahead` env). Ignored when `stream` is off. Advanced: `CNE_PREFETCH=full`.
 
 **Use when:** essentially never today; revisit on machines where fills are
 cheap relative to compute (very fast storage) or models far beyond cache
@@ -387,6 +390,7 @@ Server-specific knobs:
 |---|---|
 | `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
 | `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
+| `CNE_PREFETCH=1` | prefetch overlap during streaming (default off); see §9 |
 | `CNE_KERNELS=0` | stock llama.cpp ggml-cpu path (A/B); default on when unset |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
@@ -401,8 +405,9 @@ Server-specific knobs:
 | `CNE_API_RPM` | N | Per-user requests/minute (0 = off) |
 | `CNE_SESSION_MAX_PER_USER` | N | Max parked chats per user (default 2 in API mode) |
 
-Config file keys: `api_mode`, `api_keys` (array), `api_keys_file`, `api_rpm`,
-`session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
+Config file keys: `stream`, `prefetch`, `kernels`, `dense`, `ctx`, `threads`,
+`mtp`, `cache_gib`, `session_max`, `api_mode`, `api_keys` (array),
+`api_keys_file`, `api_rpm`, `session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
 for the two-tier key model (internal vs client keys).
 
 **Public API:** run **`cne_gateway`** in front of API-mode `cne_server` on
@@ -437,7 +442,7 @@ The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >
 built-in default, and every resolved knob is logged with its source at
 boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
-`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`. See **docs/SETUP.md**.
+`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`, `prefetch`. See **docs/SETUP.md**.
 
 Behavior notes:
 
