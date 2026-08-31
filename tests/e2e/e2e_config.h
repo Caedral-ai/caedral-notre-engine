@@ -22,10 +22,9 @@ struct ChatOpts {
 
 struct GatewayOpts {
     std::unordered_map<std::string, std::string> env;
-    std::string users_file;
-    std::string username = "alice";
-    std::string password = "changeme";
-    int         port     = 0; // 0 = server port + 1
+    std::string api_keys_file;
+    std::string client_api_key; // Bearer key for live tests
+    int         port = 0;       // 0 = server port + 1
 };
 
 struct Config {

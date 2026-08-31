@@ -97,6 +97,10 @@ Accepted value grammars:
 | threads | whole number >= 1 |
 | context size | whole number >= 1 |
 | conversation lanes (`session_max`) | whole number 1–64; KV lanes + LRU cap on `conversation_id` |
+| API mode (`api_mode`) | on \| off; multi-user auth + `chat_id` tenancy |
+| sessions per user (`session_max_per_user`) | whole number 1–64; per-user LRU when API mode on |
+| API rate limit (`api_rpm`) | requests/minute per user; 0 = off |
+| internal keys file (`api_keys_file`) | path relative to models dir (gateway secret) |
 | expert cache cap | GiB number; empty or 0 = budget manager clamps |
 | thinking default | `on` \| `off` |
 | wall cap per request | seconds, 0 = off |
@@ -146,11 +150,19 @@ Written where you pointed `--config` (default `models/server.json`):
   "mtp": 0,
   "port": 8080,
   "session_max": 2,
+  "session_max_per_user": 2,
+  "api_mode": true,
+  "api_keys_file": "api_keys.txt",
+  "api_rpm": 120,
   "stream": false,
   "think": true,
   "threads": 4
 }
 ```
+
+With API mode, `cne_setup` can also write `models/api_keys.txt` (internal key for
+the gateway). Client-facing keys stay in `gateway/api_keys.local.txt` — see
+**docs/GATEWAY.md**.
 
 Example above is tuned for **multi-turn / multi-user chat** (`mtp: 0`,
 `session_max: 2` → 2048 tokens per parked conversation). For stateless MTP

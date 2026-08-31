@@ -1,6 +1,0 @@
-# Dev users for gateway login (POST /v1/auth/token).
-# Format: username:password
-# Production: replace with your IdP or hashed credentials — see docs/GATEWAY.md
-
-alice:changeme
-bob:changeme

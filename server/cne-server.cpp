@@ -118,15 +118,19 @@ void apply_config_file(const std::string& path, std::string& model_out,
         }
     }
     if (cfg.contains("api_keys_file") && cfg["api_keys_file"].is_string()) {
-        const std::string path = cfg["api_keys_file"].get<std::string>();
+        std::string keys_path = cfg["api_keys_file"].get<std::string>();
+        if (!keys_path.empty() && !fs::path(keys_path).is_absolute())
+            keys_path = (fs::path(path).parent_path() / keys_path)
+                            .lexically_normal()
+                            .string();
         if (!getenv("CNE_API_KEYS_FILE")) {
 #ifdef _WIN32
-            _putenv_s("CNE_API_KEYS_FILE", path.c_str());
+            _putenv_s("CNE_API_KEYS_FILE", keys_path.c_str());
 #else
-            setenv("CNE_API_KEYS_FILE", path.c_str(), 1);
+            setenv("CNE_API_KEYS_FILE", keys_path.c_str(), 1);
 #endif
             fprintf(stderr, "[config] API_KEYS_FILE = %s (config)\n",
-                    path.c_str());
+                    keys_path.c_str());
         }
     }
 }

@@ -1,0 +1,19 @@
+{
+  "description": "API mode — per-user session cap (session_max_per_user)",
+  "model": "models/lfm2-24b-a2b/LFM2-24B-A2B-Q4_K_M-prepared.gguf",
+  "env": {
+    "CNE_MTP": "0",
+    "CNE_STREAM": "0",
+    "CNE_CTX": "2048",
+    "CNE_SESSION_MAX": "4",
+    "CNE_API_MODE": "1",
+    "CNE_API_KEY": "e2e-test-secret",
+    "CNE_SESSION_MAX_PER_USER": "2",
+    "CNE_API_RPM": "120"
+  },
+  "chat": {
+    "max_tokens": 4,
+    "think_off": true
+  },
+  "boot_timeout_s": 90
+}

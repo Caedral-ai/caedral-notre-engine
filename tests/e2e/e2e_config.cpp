@@ -107,19 +107,18 @@ bool load(const std::string& path, const std::string& project_source_dir,
                         std::to_string(it.value().get<int>());
             }
         }
-        if (g.contains("users_file") && g["users_file"].is_string())
-            out.gateway.users_file =
-                resolve_path(g["users_file"].get<std::string>(),
+        if (g.contains("api_keys_file") && g["api_keys_file"].is_string())
+            out.gateway.api_keys_file =
+                resolve_path(g["api_keys_file"].get<std::string>(),
                              project_source_dir);
-        if (g.contains("username") && g["username"].is_string())
-            out.gateway.username = g["username"].get<std::string>();
-        if (g.contains("password") && g["password"].is_string())
-            out.gateway.password = g["password"].get<std::string>();
+        if (g.contains("client_api_key") && g["client_api_key"].is_string())
+            out.gateway.client_api_key = g["client_api_key"].get<std::string>();
         if (g.contains("port") && g["port"].is_number_integer())
             out.gateway.port = g["port"].get<int>();
     }
 
-    out.model = resolve_path(out.model, project_source_dir);
+    if (!out.model.empty())
+        out.model = resolve_path(out.model, project_source_dir);
     return true;
 }
 

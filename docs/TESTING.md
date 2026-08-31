@@ -20,7 +20,8 @@ Live tests read env and runtime settings from JSON instead of long `ctest`
 |---|---|---|
 | `server_e2e_live` | `server_e2e_live.json` | LFM2: fork `cne_server` → chat + session KV reuse |
 | `server_api_live` | `server_api_live.json` | API mode: auth, `chat_id`, per-user sessions |
-| `server_gateway_live` | `server_gateway_live.json` | JWT gateway → CNE: login, chat, KV reuse |
+| `server_api_per_user_live` | `server_api_per_user_live.json` | API mode: `session_max_per_user` eviction (fails fast on boot errors) |
+| `server_gateway_live` | `server_gateway_live.json` | API-key gateway → CNE: chat, KV reuse |
 | `server_e2e_qwen_live` | `server_e2e_qwen_live.json` | Qwen3.6: same HTTP path; `CNE_MTP=0`, thinking off |
 | `session_kv_live` | `session_kv_live.json` | LFM2 runtime session KV reuse, parity, alternating `conversation_id`s (no auth) |
 | `session_kv_qwen_live` | `session_kv_qwen_live.json` | Qwen3.6 runtime session KV (slow) |

@@ -45,7 +45,8 @@ bool valid_value(const std::string& key, const std::string& v,
     else if (key == "dense")
         err = "mmap | warm | anon";
     else if (key == "mtp" || key == "threads" || key == "ctx" ||
-             key == "session_max")
+             key == "session_max" || key == "session_max_per_user" ||
+             key == "api_rpm")
         err = "a whole number" +
               std::string(key == "threads" ? " >= 1" : "");
     else if (key == "port")
@@ -56,11 +57,14 @@ bool valid_value(const std::string& key, const std::string& v,
         err = "seconds (e.g. 600)";
     else if (key == "host")
         err = "an IP or hostname";
+    else if (key == "api_keys_file")
+        err = "a path (relative to models dir)";
     else
         return true;
 
     if (v.empty()) return true;   // '!' cleared -> engine default
-    if (key == "stream" || key == "think" || key == "kernels") {
+    if (key == "stream" || key == "think" || key == "kernels" ||
+        key == "api_mode") {
         if (v != "on" && v != "off" && v != "0" && v != "1") return false;
         return true;
     }
@@ -80,7 +84,11 @@ bool valid_value(const std::string& key, const std::string& v,
     if (!all_digits(v)) return false;
     long n = atol(v.c_str());
     if (key == "threads" || key == "ctx") return n >= 1;
-    if (key == "session_max") return n >= 1 && n <= 64;
+    if (key == "session_max" || key == "session_max_per_user")
+        return n >= 1 && n <= 64;
+    if (key == "api_rpm") return n >= 0;
+    if (key == "api_keys_file")
+        return v.find_first_of(" \t") == std::string::npos;
     return true;   // mtp >= 0, cache_gib >= 0 (= clamp)
 }
 
@@ -180,6 +188,19 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
         mtp_on ? "1 when MTP on (sessions need CNE_MTP=0)"
                : "serial multi-user KV parking; see KV estimate above");
 
+    add("api_mode", "API mode (multi-user)", mtp_on ? "off" : "on",
+        mtp_on ? "MTP and API sessions are incompatible"
+               : "API key auth + chat_id tenancy; use gateway for client keys");
+
+    add("session_max_per_user", "sessions per user", "2",
+        "per-user LRU when API mode on; 0 = global LRU only");
+
+    add("api_rpm", "API rate limit", "120",
+        "requests/minute per user in API mode; 0 = off");
+
+    add("api_keys_file", "internal API keys file", "api_keys.txt",
+        "gateway-only secret; client keys live in gateway/api_keys.local.txt");
+
     add("cache_gib", "expert cache cap", "",
         "empty = budget manager clamps to MemAvailable (recommended)");
 
@@ -194,6 +215,30 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
     add("port", "port", "8080", "");
 
     return items;
+}
+
+std::string gen_internal_api_key() {
+    unsigned char buf[24];
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (!f) return "change-me-in-production";
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    if (n != sizeof(buf)) return "change-me-in-production";
+    static const char hex[] = "0123456789abcdef";
+    std::string out = "cne_internal_";
+    for (unsigned char b : buf) {
+        out += hex[b >> 4];
+        out += hex[b & 0xf];
+    }
+    return out;
+}
+
+bool api_mode_on(const std::vector<Item>& items) {
+    for (const auto& it : items) {
+        if (it.key != "api_mode") continue;
+        return it.value == "on" || it.value == "1" || it.value == "true";
+    }
+    return false;
 }
 
 } // namespace
@@ -352,23 +397,56 @@ int main(int argc, char** argv) {
     json cfg;
     cfg["model"] = fs::relative(*artifact, models_dir).string();
     int mtp_k = 0;
+    bool api_on = api_mode_on(items);
+    std::string api_keys_rel = "api_keys.txt";
     for (const auto& it : items) {
         if (it.value.empty()) continue;
         if (it.key == "stream" || it.key == "think" || it.key == "kernels")
             cfg[it.key] = (it.value == "on" || it.value == "1" ||
                            it.value == "true");
-        else if (it.key == "threads" || it.key == "ctx" || it.key == "port" ||
+        else if (it.key == "api_mode") {
+            api_on = (it.value == "on" || it.value == "1" ||
+                      it.value == "true");
+            if (api_on) cfg[it.key] = true;
+        } else if (it.key == "threads" || it.key == "ctx" || it.key == "port" ||
                  it.key == "session_max")
             cfg[it.key] = atoi(it.value.c_str());
-        else if (it.key == "max_req_s")
+        else if (it.key == "session_max_per_user" || it.key == "api_rpm") {
+            if (!api_on) continue;
+            cfg[it.key] = atoi(it.value.c_str());
+        } else if (it.key == "max_req_s")
             cfg[it.key] = atof(it.value.c_str());
         else if (it.key == "mtp") {
             mtp_k = atoi(it.value.c_str());
             cfg[it.key] = mtp_k;
         } else if (it.key == "cache_gib") {
             if (atoi(it.value.c_str()) > 0) cfg[it.key] = atoi(it.value.c_str());
+        } else if (it.key == "api_keys_file") {
+            api_keys_rel = it.value;
+            if (api_on) cfg[it.key] = it.value;
         } else
             cfg[it.key] = it.value;
+    }
+    if (api_on) {
+        if (!cfg.contains("session_max") || cfg["session_max"].get<int>() < 2) {
+            fprintf(stderr,
+                    "[setup] session_max < 2 with API mode — bumping to 2\n");
+            cfg["session_max"] = 2;
+        }
+        const fs::path keys_path = models_dir / api_keys_rel;
+        if (!fs::exists(keys_path)) {
+            const char* preset = getenv("CNE_SETUP_INTERNAL_API_KEY");
+            std::string key =
+                (preset && *preset) ? preset : gen_internal_api_key();
+            std::ofstream kf(keys_path);
+            if (!kf) {
+                fprintf(stderr, "cannot write %s\n", keys_path.c_str());
+                return 1;
+            }
+            kf << "# Internal key for cne_gateway → cne_server (not client keys)\n"
+               << key << "\n";
+            printf("wrote internal API key to %s\n", keys_path.c_str());
+        }
     }
     if (mtp_k > 0) cfg["mtp_p_min"] = 0.5;   // measured pairing, SERVER.md §6
 
@@ -397,6 +475,11 @@ int main(int argc, char** argv) {
         else if (it.key == "threads")   kv("CNE_THREADS", it.value);
         else if (it.key == "ctx")       kv("CNE_CTX", it.value);
         else if (it.key == "session_max") kv("CNE_SESSION_MAX", it.value);
+        else if (it.key == "session_max_per_user")
+            kv("CNE_SESSION_MAX_PER_USER", it.value);
+        else if (it.key == "api_mode")
+            kv("CNE_API_MODE", env_on(it.value));
+        else if (it.key == "api_rpm") kv("CNE_API_RPM", it.value);
         else if (it.key == "cache_gib") kv("CNE_CACHE_GIB", it.value);
         else if (it.key == "think")     kv("CNE_THINK", env_on(it.value));
         else if (it.key == "max_req_s") kv("CNE_MAX_REQ_S", it.value);
@@ -410,5 +493,13 @@ int main(int argc, char** argv) {
     printf("\nwrote %s\nwhat will run:\n  %scne_server %s %s %s\n",
            config_path.string().c_str(), envs.c_str(),
            artifact->string().c_str(), host.c_str(), port.c_str());
+    if (api_on) {
+        printf("\nAPI mode: expose cne_server on 127.0.0.1 only; run cne_gateway "
+               "for client keys.\n");
+        printf("  gateway internal key: same value as %s\n",
+               (models_dir / api_keys_rel).c_str());
+        printf("  client keys file: gateway/api_keys.local.txt\n");
+        printf("  see docs/GATEWAY.md\n");
+    }
     return 0;
 }

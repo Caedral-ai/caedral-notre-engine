@@ -103,18 +103,18 @@ Do **not** expose `cne_server` directly on the internet. Put an API layer in
 front.
 
 ```
-Clients (JWT)  →  gateway :8090  →  cne_server :8080 (API mode, 127.0.0.1)
+Clients (API key)  →  gateway :8090  →  cne_server :8080 (API mode, 127.0.0.1)
 ```
 
-**Path B (recommended):** use the JWT gateway — **docs/GATEWAY.md**. End users
-authenticate to the gateway; the gateway forwards to CNE with the internal API
-key and `X-User-Id` from the JWT `sub`.
+**Path B (recommended):** use the API-key gateway — **docs/GATEWAY.md**. Each
+user gets a client API key; the gateway forwards to CNE with the internal API
+key and `X-User-Id` from the key mapping.
 
 ```
 ┌───────────────────────────────────────┐
-│  cne_gateway (JWT, :8090)              │  ← Path B — docs/GATEWAY.md
-│  - POST /v1/auth/token                 │
-│  - validates JWT on /v1/chat/*          │
+│  cne_gateway (API key, :8090)          │  ← Path B — docs/GATEWAY.md
+│  - validates Bearer key on /v1/chat/*  │
+│  - maps key → X-User-Id                │
 └───────────────────────────────────────┘
         │ internal API key + X-User-Id
         ▼
@@ -129,7 +129,7 @@ key and `X-User-Id` from the JWT `sub`.
 
 | Item | Where |
 |---|---|
-| **Authentication** | `cne_gateway` — JWT (`POST /v1/auth/token`) |
+| **Authentication** | `cne_gateway` — client API keys (`Authorization: Bearer`) |
 | **Stable id namespace** | Gateway → CNE `chat_id` as `{user}:{chat}` |
 | **Per-user session limit** | `cne_server` — `session_max_per_user` |
 | **Rate limits** | Gateway `CNE_GATEWAY_RPM` + nginx |
@@ -150,8 +150,8 @@ integration.
 | Your own client | **Yes** | Full control |
 
 For multi-user hosting, point clients at **`cne_gateway`** (`docs/GATEWAY.md`).
-It issues JWTs, maps `X-Chat-Id` → CNE sessions, and never exposes the internal
-API key.
+It validates client API keys, maps `X-Chat-Id` → CNE sessions, and never
+exposes the internal API key.
 
 ---
 

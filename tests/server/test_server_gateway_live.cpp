@@ -1,4 +1,4 @@
-// HTTP E2E: JWT gateway → cne_server. Config: server_gateway_live.json
+// HTTP E2E: API-key gateway → cne_server. Config: server_gateway_live.json
 #include "e2e_config.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -219,8 +219,8 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
 
     std::unordered_map<std::string, std::string> gw_env = cfg.gateway.env;
     gw_env["CNE_UPSTREAM"] = "http://127.0.0.1:" + std::to_string(server_port);
-    if (!cfg.gateway.users_file.empty())
-        gw_env["CNE_GATEWAY_USERS_FILE"] = cfg.gateway.users_file;
+    if (!cfg.gateway.api_keys_file.empty())
+        gw_env["CNE_GATEWAY_API_KEYS_FILE"] = cfg.gateway.api_keys_file;
 
     ChildProcess cne;
     if (!cne.start_server(model_path, server_port, cfg.env)) {
@@ -257,20 +257,16 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
                                                   {"content", "The capital of France is"}} }),
                           chat_id, max_tok, cfg.chat.think_off);
     if (!post_json(gw_cli, "/v1/chat/completions", {}, body, 401, err)) {
-        fprintf(stderr, "FAIL: expected 401 without JWT (%s)\n", err.c_str());
+        fprintf(stderr, "FAIL: expected 401 without API key (%s)\n", err.c_str());
         return 1;
     }
 
-    json tok_body = {{"username", cfg.gateway.username},
-                     {"password", cfg.gateway.password}};
-    json tok_json;
-    if (!post_json(gw_cli, "/v1/auth/token", {}, tok_body, 200, err, &tok_json)) {
-        fprintf(stderr, "FAIL: login (%s)\n", err.c_str());
+    if (cfg.gateway.client_api_key.empty()) {
+        fprintf(stderr, "FAIL: gateway.client_api_key not set in e2e config\n");
         return 1;
     }
-    const std::string token = tok_json["access_token"].get<std::string>();
     const httplib::Headers auth = {
-        {"Authorization", "Bearer " + token},
+        {"Authorization", "Bearer " + cfg.gateway.client_api_key},
         {"Content-Type", "application/json"},
     };
 
@@ -341,10 +337,10 @@ int main() {
                model.c_str());
         return 0;
     }
-    if (cfg.gateway.users_file.empty() ||
-        access(cfg.gateway.users_file.c_str(), R_OK) != 0) {
-        printf("skip: server_gateway live (gateway users file missing: %s)\n",
-               cfg.gateway.users_file.c_str());
+    if (cfg.gateway.api_keys_file.empty() ||
+        access(cfg.gateway.api_keys_file.c_str(), R_OK) != 0) {
+        printf("skip: server_gateway live (gateway api_keys file missing: %s)\n",
+               cfg.gateway.api_keys_file.c_str());
         return 0;
     }
 

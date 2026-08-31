@@ -4,8 +4,8 @@
 # Usage:
 #   1. Run cne_server on 127.0.0.1:8080 with API mode (see docs/SERVING.md).
 #   2. Point clients at https://api.example.com/v1/... (this proxy).
-#   3. Your app still sends Authorization + X-User-Id to cne_server
-#      (proxy can inject them from JWT after auth).
+#   3. Clients send Authorization: Bearer <client-api-key> to the gateway.
+#      The gateway maps the key to X-User-Id for cne_server (internal key only).
 
 limit_req_zone $binary_remote_addr zone=cne_api:10m rate=30r/m;
 

@@ -1,5 +1,5 @@
 {
-  "description": "Gateway + cne_server live E2E (JWT login, chat, session KV)",
+  "description": "Gateway + cne_server live E2E (API key auth, chat, session KV)",
   "model": "",
   "env": {
     "CNE_MTP": "0",
@@ -13,13 +13,11 @@
   },
   "gateway": {
     "env": {
-      "CNE_GATEWAY_JWT_SECRET": "e2e-jwt-secret-at-least-32-bytes-long",
       "CNE_INTERNAL_API_KEY": "e2e-test-secret",
       "CNE_GATEWAY_RPM": "120"
     },
-    "users_file": "gateway/users.example.txt",
-    "username": "alice",
-    "password": "changeme"
+    "api_keys_file": "gateway/api_keys.example.txt",
+    "client_api_key": "cne_sk_alice_dev_replace_me_in_production"
   },
   "chat": {
     "chat_id": "e2e-gw-chat",
