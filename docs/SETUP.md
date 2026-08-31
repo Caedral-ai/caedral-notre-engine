@@ -130,9 +130,11 @@ Suggestions come from measurements on the reference machine/hardware class
 - **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, kernels on,
   4 threads, ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
   `docs/models/lfm2-24b-a2b.md`
-- **LFM2.5-8B-A1B** — on **≤ 4 GiB** hosts: stream off, dense **`anon`**, kernels
-  on, 4 threads, ctx 1024 (~2.9 GiB peak RSS, ~12 tok/s). On **16 GiB+**: stream
-  off, dense `mmap`, ctx 2048–4096 (~18 tok/s). See `docs/models/lfm2.5-8b-a1b.md`
+- **LFM2.5-8B-A1B** — on **≤ 4 GiB** hosts: stream off, dense **`anon`**, t4,
+  ctx 1024 (~11 tok/s @ 250 tok, ~2.9 GiB peak). Streaming + 3 GiB cache:
+  t4, **`CNE_LANES=2`** (~9 tok/s). On **16 GiB+**: stream off, dense `mmap`,
+  t4, ctx 2048 (~12 tok/s). **Avoid 8 threads** on both paths. See
+  `docs/models/lfm2.5-8b-a1b.md`
 - **conversation lanes** (`session_max`) - when MTP is off, typically 2 (3 on
   comfortable RAM); 1 when MTP is on or memory is tight. Sets `CNE_SESSION_MAX`
   and splits total `ctx` evenly across lanes (`ctx / session_max` tokens per

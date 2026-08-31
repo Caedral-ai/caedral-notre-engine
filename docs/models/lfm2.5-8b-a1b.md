@@ -89,13 +89,91 @@ plan (streaming + kernels): `internal-docs/plans/LFM2.5-8B-A1B_STREAM_KERNELS.md
 
 | profile | RSS (HWM) | tok/s | wall | notes |
 |---|---|---|---|---|
-| **anon, stream off, ctx 1024, t4** | **2.89 GiB** | **11.84** | 21.1 s | **recommended 4 GiB profile** |
-| anon, stream on, 3 GiB cache, t4 | 3.87 GiB | 7.41 | 33.7 s | 96.9% hit-rate; 24% wall in I/O fills |
-| mmap-dense, stream off, ctx 2048, t4 | 4.96 GiB | 12.86 | 19.4 s | needs ≥ 6 GiB host |
+| **anon, stream off, ctx 1024, t4** | **2.89 GiB** | **11.1** | 22.5 s | **4 GiB recommended** (tuned) |
+| mmap-dense, stream off, ctx 2048, t4 | 4.96 GiB | **12.0** | 20.8 s | **≥ 6 GiB velocity** (tuned) |
+| anon, stream on, 3 GiB cache, **t4, lanes 2** | 3.87 GiB | **9.06** | 27.6 s | tuned streaming; 96.9% hit |
+| anon, stream on, 3 GiB cache, t4 (default lanes 4) | 3.87 GiB | 7.41 | 33.7 s | 96.9% hit; 24% wall in I/O fills |
 
 At 250 tokens, **anon + no stream beats stream + 3 GiB cache** on both velocity
-(~60% faster) and peak RSS. Use streaming only when LRU residency is required
-(multi-tenant / colocation), not for single-session speed on 4 GiB.
+(~22% faster tuned) and peak RSS. Use streaming only when LRU residency is
+required (multi-tenant / colocation), not for single-session speed on 4 GiB.
+
+#### No-stream tuning (250 tok, `CNE_STREAM=0`, `CNE_KERNELS=1`)
+
+**4 GiB — `dense=anon`** (peak RSS **~2.89 GiB** across all sweeps):
+
+**Threads** (`ctx=1024`):
+
+| threads | tok/s (best run) | notes |
+|---|---|---|
+| 2 | 8.36 | |
+| 3 | 7.41 | |
+| **4** | **11.11** | **tuned default** |
+| 6 | 10.39 | flat vs t4 |
+| 8 | 6.00 | **avoid** — SMT regression |
+
+**Context** (`threads=4`):
+
+| ctx | tok/s (best run) | peak RSS |
+|---|---|---|
+| 512 | 7.39 | 2.88 GiB |
+| **1024** | **11.11** | 2.89 GiB | **recommended** |
+| 2048 | 9.85 | 2.90 GiB | same RSS band; use for longer sessions |
+| 4096 | 8.43 | 2.92 GiB | diminishing returns |
+
+`CNE_KERNELS=0` and `CNE_FA=1` were flat (±3%) on anon at t4/ctx 1024.
+
+**16 GiB+ — `dense=mmap`** (RSS **~4.96 GiB**, independent of ctx):
+
+| threads | tok/s (best run, ctx 2048) | notes |
+|---|---|---|
+| 2 | 9.26 | |
+| **4** | **12.01** | **tuned default** |
+| 6 | 10.43 | |
+| 8 | 4.46 | **avoid** |
+
+| ctx (t4) | tok/s (best run) |
+|---|---|
+| 1024 | 7.73 |
+| **2048** | **12.01** |
+| 4096 | 8.35 |
+
+Repeat runs under host load showed **~7 tok/s** (anon) and **~8.3 tok/s**
+(mmap) — treat **t4 + avoid t8** as the stable finding; absolute tok/s varies
+with machine state. Peak numbers above are best-of sweep on a quiet host.
+
+**Tuned no-stream profiles:**
+
+| host | config | tok/s (best) | peak RSS |
+|---|---|---|---|
+| **4 GiB** | `dense=anon`, t4, ctx 1024 | **11.1** | **2.89 GiB** |
+| **16 GiB+** | `dense=mmap`, t4, ctx 2048 | **12.0** | 4.96 GiB |
+
+#### Streaming tuning (`dense=anon`, 3 GiB cache, 250 tok)
+
+Hit-rate was **96.88%** across all sweeps (same greedy prompt). RSS stayed
+~3.76–3.88 GiB throughout.
+
+**Threads** (`CNE_LANES=4` default):
+
+| threads | tok/s | wall | notes |
+|---|---|---|---|
+| 2 | 7.50 | 33.3 s | |
+| **4** | **7.84** | 31.9 s | best compute/I/O balance |
+| 6 | 7.75 | 32.3 s | flat vs t4 |
+| 8 | 3.00 | 83.4 s | **avoid** — SMT starves I/O fill workers |
+
+**I/O lanes** (`CNE_THREADS=4`):
+
+| lanes | tok/s | wall |
+|---|---|---|
+| 1 | 8.69 | 28.8 s |
+| **2** | **9.06** | **27.6 s** | **tuned default** |
+| 4 | 8.99 | 27.8 s | engine default |
+| 8 | 9.00 | 27.8 s | no gain vs 2 |
+
+**Tuned streaming profile:** `threads=4`, `CNE_LANES=2` → **9.06 tok/s** (+22%
+vs untuned t4/lanes-4 @ 7.41). Still below tuned anon no-stream (11.1 tok/s).
 
 Reproduce smoke: `./bench/scripts/lfm2.5/memory-profile.sh`
 
@@ -106,20 +184,22 @@ UD-Q4_K_XL fits **≤ 4 GiB RSS** with **`CNE_DENSE=anon`** (no smaller quant ne
 1. **No MAP_POPULATE** on load when `dense=anon` (llama fork).
 2. **Dense weights** copied to anonymous memory (~522 MiB); file-backed dense pages dropped immediately.
 3. **Expert weights** mmap-trimmed after boot and **each decode step** when stream is off (demand-paged from disk; peak ~2.9 GiB HWM on 250-token run).
-4. Optional: **`stream: on` + 3 GiB cache** stays under 4 GiB (~3.9 GiB peak @ 250 tok) but is **slower** than anon no-stream at sustained length (7.4 vs 11.8 tok/s measured).
+4. Optional: **`stream: on` + 3 GiB cache** stays under 4 GiB (~3.9 GiB peak @
+   250 tok). Tuned **`threads=4`, `CNE_LANES=2`** → **9.06 tok/s** (still below
+   tuned anon no-stream at **11.1 tok/s**).
 
 ```sh
-# 4 GiB profile — no stream (recommended: best tok/s under cap)
+# 4 GiB profile — no stream, tuned (t4, ctx 1024)
 CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
 
-# 4 GiB profile — stream + 3 GiB expert cache (LRU residency; slower @ 250 tok)
-CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+# 4 GiB profile — stream + 3 GiB cache (tuned: t4, lanes 2)
+CNE_STREAM=1 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_LANES=2 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
 
-# 16 GiB velocity baseline (250 tok)
+# 16 GiB velocity — no stream, tuned (t4, ctx 2048)
 CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_EOS=1 \
   ./build/tools/cne_bench \
   models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
@@ -134,9 +214,9 @@ Disable mmap drop (debug only): `CNE_DENSE_DROP_MMAP=0`.
 | knob | value | notes |
 |---|---|---|
 | `stream` | off | lowest overhead on R0 |
-| `dense` | mmap | ~4.94 GiB RSS |
-| `ctx` | 1024–4096 | |
-| `threads` | 4 | |
+| `dense` | mmap | ~4.96 GiB RSS |
+| `ctx` | **2048** | tuned @ 250 tok; 4096 regresses |
+| `threads` | **4** | avoid 8 (SMT) |
 | `kernels` | on | |
 
 **4 GiB RAM:**
@@ -145,16 +225,37 @@ Disable mmap drop (debug only): `CNE_DENSE_DROP_MMAP=0`.
 |---|---|---|
 | `stream` | off | per-step expert trim keeps RSS under cap |
 | `dense` | **anon** | required — binds ~522 MiB dense, drops expert mmap |
-| `ctx` | 1024 | |
-| `threads` | 4 | |
+| `ctx` | **1024** | tuned; 2048 OK for longer sessions (same ~2.9 GiB peak) |
+| `threads` | **4** | avoid 8 (SMT) |
 | `kernels` | on | |
 | `cache_gib` | 0 | stream off |
 
-Optional: `stream: on`, `cache_gib: 3`, `dense: anon` if you need LRU expert
-residency (still under 4 GiB, but **~7.4 tok/s @ 250 tok** vs **~11.8** with
-stream off).
+Optional: `stream: on`, `cache_gib: 3`, `dense: anon`, `threads: 4`, env
+`CNE_LANES=2` for LRU expert residency (~**9.1 tok/s @ 250 tok**, ~3.9 GiB peak;
+still slower than tuned anon no-stream at **11.1 tok/s**).
 
-Example `models/server.json` for **4 GiB**:
+Example `models/server.json` for **4 GiB + streaming** (multi-tenant / LRU):
+
+```json
+{
+  "model": "lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf",
+  "stream": true,
+  "cache_gib": 3,
+  "dense": "anon",
+  "ctx": 1024,
+  "threads": 4,
+  "kernels": true,
+  "mtp": 0,
+  "session_max": 1,
+  "think": false,
+  "host": "127.0.0.1",
+  "port": 8080
+}
+```
+
+Set **`CNE_LANES=2`** in the server environment (not yet in `server.json`).
+
+Example `models/server.json` for **4 GiB** (single-session, fastest):
 
 ```json
 {
