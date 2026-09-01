@@ -105,7 +105,7 @@ Users state intent; the engine resolves settings:
 | Draft-MTP speculation | ![](https://img.shields.io/badge/status-working-brightgreen) | native Multi-Token Prediction head drafts k tokens per step; full model verifies. Lossless by construction (0% quality loss); tuned config measured at 4.86 tok/s vs 4.00 naive on the reference machine (+20%). **Not combinable with server `conversation_id` sessions** — see below |
 | Custom CPU kernels (`CNE_KERNELS`) | ![](https://img.shields.io/badge/status-working-brightgreen) | fused AVX2 MoE GEMV in the pinned llama.cpp fork — q8 activation cache, `mul_mat_id` dispatch, q4 gate/up and q6 expert-down `2vx`/`4vx`. One toggle (`CNE_KERNELS=1` default); token-identical to stock. **+10.6%** on LFM2 tg250 vs `CNE_KERNELS=0` (i5-1135G7, t4) |
 | OpenAI-compatible server | ![](https://img.shields.io/badge/status-working-brightgreen) | `/v1/chat/completions` (SSE), `/v1/models`, `/health` (sessions + queue); multi-turn KV via `conversation_id`; API mode (`chat_id`, per-user caps) |
-| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | Path B public API: client API keys, rate limits, proxies to `cne_server` on localhost — **docs/GATEWAY.md** |
+| API gateway (`cne_gateway`) | ![](https://img.shields.io/badge/status-working-brightgreen) | **Minimal** reference proxy: client API keys, RPM, chat policy → `cne_server` on localhost. Fine for dev/small deploys; production usually needs a stronger edge — **docs/GATEWAY.md** |
 
 Full per-feature guidance — including when *not* to use each one — lives in
 **[docs/FEATURES.md](docs/FEATURES.md)**. Reference hardware, measured
@@ -211,6 +211,7 @@ cmake --build build -j
 # fetch + align a model (both scripts verify sha256 and run cne_prepare)
 ./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # Qwen3.6-35B-A3B UD-Q4_K_XL + MTP (~22.9 GB)
 ./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B Q4_K_M, no-stream profile (~14.4 GB)
+./tools/scripts/download-lfm2.5-8b-a1b.sh             # LFM2.5-8B-A1B AtomicChat UD-Q4_K_XL (~5.2 GB)
 ```
 
 Both models then appear in `cne_setup`'s artifact picker automatically.
@@ -219,7 +220,8 @@ Recommended profiles:
 | model | total / active | profile | notes |
 |---|---|---|---|
 | Qwen3.6-35B-A3B | 35B / 3B | mmap-dense + MTP k=8 | lossless speculation; needs `ctx ≥ 1024` |
-| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server, ~9.5 tg250 (`CNE_KERNELS=1`) |
+| LFM2-24B-A2B | 24B / 2.3B | **no-stream** + warm dense, t4, ctx 4096 | hybrid conv+MoE; no MTP; ~10.5 tok/s server |
+| LFM2.5-8B-A1B | 8.5B / ~1.5B | **4 GiB:** anon, stream off, t4, ctx 1024 · **16 GiB:** mmap, t4, ctx 2048 (**tg250 ~14.8 tok/s**) | AtomicChat UD-Q4_K_XL; **+16.8% kernels**; **docs/models/lfm2.5-8b-a1b.md** |
 
 Bench CLI: `<gguf> [cache_cap_gib=8] [n_gen=64] [verify_n=64] [stream=1]`.
 The cache cap is automatically clamped to the machine's real budget.
@@ -231,8 +233,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCNE_BUILD_SERVER=ON -DCNE_BUILD_CLI=
 cmake --build build --target cne_server cne_setup -j
 
 # first run: detect hardware, preview the regime, confirm every setting
-# interactively (or -y to accept the suggestions). Writes models/server.json;
-# aborting writes nothing.
+# interactively (or -y to accept the suggestions). Writes models/server.json
+# (stream, prefetch, kernels, ctx, sessions, …); aborting writes nothing.
 ./build/cli/cne_setup
 
 # boot with zero env vars - the confirmed config drives everything
@@ -288,6 +290,12 @@ Live integration tests (JSON configs, `ctest`): **[docs/TESTING.md](docs/TESTING
 For a **public** API, bind `cne_server` to `127.0.0.1` only and put
 **`cne_gateway`** in front. Users get a **client API key** (no login/JWT).
 
+`cne_gateway` is intentionally **simple** (single process, file-based keys,
+in-memory RPM). It is a reference path to multi-user serving, not a full
+production API platform — see **docs/GATEWAY.md** for scope and what to add at
+scale (TLS, HA, centralized auth, billing, metrics, and a load-balanced engine
+tier).
+
 ```sh
 # 1. Setup with API mode (writes models/server.json + models/api_keys.txt)
 ./build/cli/cne_setup -y
@@ -322,9 +330,11 @@ Live stack: `ctest --test-dir build -R server_gateway_live --output-on-failure`
 
 | Variable | Values | Effect |
 |---|---|---|
-| `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime) |
+| `CNE_DENSE` | `mmap` \| `warm` \| `anon` | dense-weight residency policy (default: auto by regime). **`anon`** on 4 GiB MoE hosts: private dense copy + expert mmap trim (see **docs/models/lfm2.5-8b-a1b.md**) |
+| `CNE_PREFETCH` | `1` \| `lookahead` \| `full` | speculative expert prefetch during **streaming** (default off); see **docs/FEATURES.md** §9 |
+| `CNE_DENSE_DROP_MMAP` | `0` \| unset | unset = drop file-backed RSS after `anon` bind (default on); `0` = debug / A/B only |
 | `CNE_KERNELS` | `1` \| `0` | custom ggml-cpu kernels in the pinned fork (default on); `0` = stock llama A/B |
-| `CNE_LANES` | N | parallel slice-read workers (default 4) |
+| `CNE_LANES` | N | parallel O_DIRECT slice-read workers (default 4); **use 2** for LFM2.5 stream+anon @ 3 GiB |
 | `CNE_MTP` | `1` \| k | enable draft-MTP speculative decoding (depth k); **incompatible with server `conversation_id` sessions** |
 | `CNE_MTP_P_MIN` | 0 < x ≤ 1 | draft-token confidence floor; keeps proposals honest, eliminates replay rounds |
 | `CNE_SESSION` | `0` | disable conversation KV reuse on the server (default on when `conversation_id` is sent) |
@@ -373,6 +383,7 @@ vs MTP** above and `docs/FEATURES.md` §5).
 ```sh
 ctest --test-dir build -R server_e2e_live --output-on-failure          # LFM2 HTTP
 ctest --test-dir build -R server_e2e_qwen_live --output-on-failure     # Qwen HTTP
+ctest --test-dir build -R server_e2e_lfm25_live --output-on-failure    # LFM2.5 HTTP
 ctest --test-dir build -R 'server_api_live|server_api_per_user_live' --output-on-failure
 ctest --test-dir build -R server_gateway_live --output-on-failure       # + gateway venv
 ```

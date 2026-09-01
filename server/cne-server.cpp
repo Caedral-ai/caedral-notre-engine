@@ -59,6 +59,7 @@ const ConfigKnob g_config_knobs[] = {
     {"api_mode", "API_MODE"},
     {"api_rpm", "API_RPM"},
     {"session_max_per_user", "SESSION_MAX_PER_USER"},
+    {"prefetch", "PREFETCH"},
 };
 
 // API keys from server.json (merged at boot); not injected as env.
@@ -153,7 +154,7 @@ struct Engine {
     int                mtp_k     = 0;
     float              mtp_p_min = 0.0f;
     bool               think_default = true;   // CNE_THINK=0 flips the default
-    bool               arch_qwen3    = false;  // enables the empty-think prefix
+    bool               arch_think_off_prefix = false;  // qwen3/lfm2moe: empty think block when off
     std::string        chat_template;   // empty = model default template
     double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
     std::mutex         gen_mutex;       // single-decode: serialize generation
@@ -760,12 +761,9 @@ void handle_chat(httplib::Response& res, const json& body,
         return;
     }
 
-    // Thinking off, Qwen3-family style: newer qwen3 artifacts ignore the
-    // /no_think soft switch and expect the ASSISTANT PREFIX to carry an
-    // already-closed empty think block - exactly what the official Jinja
-    // template emits for enable_thinking=false. Gated on the artifact's
-    // declared architecture (metadata-driven, no name guessing).
-    if (!think_enabled && eng.arch_qwen3) {
+    // Thinking off, Qwen3 / LFM2.5 (lfm2moe): inject a closed empty think block on
+    // the assistant prefix so the model skips reasoning and answers directly.
+    if (!think_enabled && eng.arch_think_off_prefix) {
         while (!rendered.empty() &&
                (rendered.back() == '\n' || rendered.back() == ' '))
             rendered.pop_back();
@@ -1126,9 +1124,10 @@ int main(int argc, char** argv) {
     // artifact even though the key exists - do not trust it here.
     {
         const std::string& arch = rt->manifest.architecture;
-        g_engine.arch_qwen3 = arch.rfind("qwen3", 0) == 0;
-        fprintf(stderr, "[server] arch=%s qwen3_gate=%d\n", arch.c_str(),
-                (int)g_engine.arch_qwen3);
+        g_engine.arch_think_off_prefix =
+            arch.rfind("qwen3", 0) == 0 || arch.rfind("lfm2moe", 0) == 0;
+        fprintf(stderr, "[server] arch=%s think_off_prefix=%d\n", arch.c_str(),
+                (int)g_engine.arch_think_off_prefix);
     }
     {
         auto pos  = g_engine.model_path.find_last_of('/');

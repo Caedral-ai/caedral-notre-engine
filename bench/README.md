@@ -57,3 +57,40 @@ CNE_BENCH_MAX_TOKENS=1000 ./bench/scripts/lfm2/server-velocity.sh
 
 See [docs/BENCHMARKS.md](../docs/BENCHMARKS.md) and
 [docs/models/lfm2-24b-a2b.md](../docs/models/lfm2-24b-a2b.md) for measured numbers.
+
+## LFM2.5
+
+| Script | What it measures |
+|---|---|
+| `scripts/lfm2.5/tg250-kernel-ab.sh` | **Canonical** kernel A/B: tg250, pp512, 5 reps/arm |
+| `scripts/lfm2.5/memory-profile.sh` | RSS (VmHWM), tok/s, hit-rate across mmap / anon / stream profiles |
+
+```sh
+# Memory + velocity probes (writes bench/results/lfm25-memory.tsv)
+./bench/scripts/lfm2.5/memory-profile.sh
+
+# 250-token sustained decode (canonical length for profile comparison)
+# 4 GiB — anon, no stream, tuned (t4, ctx 1024): ~11.1 tok/s, ~2.9 GiB peak
+CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+
+# 16 GiB+ — mmap, no stream, tuned (t4, ctx 2048): ~12.0 tok/s
+CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+
+# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2, prefetch off): ~11.1 tok/s, 97% hit
+CNE_STREAM=1 CNE_CACHE_GIB=3 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=2 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+
+# 2 GiB cache — not recommended (~4.7 tok/s, 83% hit)
+CNE_STREAM=1 CNE_CACHE_GIB=2 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=4 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 2 250 250 1
+```
+
+See [docs/models/lfm2.5-8b-a1b.md](../docs/models/lfm2.5-8b-a1b.md) for serving knobs.

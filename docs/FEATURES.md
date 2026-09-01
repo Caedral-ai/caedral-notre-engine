@@ -70,15 +70,23 @@ Controls how non-expert weights live in memory during generation:
 |---|---|---|
 | `mmap` | weights stay file-backed; kernel pages them in/out | default for small models (R0/R1); zero setup cost |
 | `warm` | engine pre-reads dense spans once before generating | rare: dedicated batch machines where first-token latency doesn't matter |
-| `anon` | engine binds every dense weight to a private anonymous copy | models near/above RAM size: eliminates major-page-fault storms (~100x fewer faults measured); costs one extra copy of dense bytes |
+| `anon` | engine binds every dense weight to a private anonymous copy; drops expert mmap RSS and (when stream is off) trims expert pages each decode step | **4 GiB hosts** with MoE models: dense stays fault-free; experts stay demand-paged under a hard RSS cap (~0.5 GiB dense + working experts) |
 
 Default: chosen automatically from the regime (anon above the thrash line,
 mmap below). Explicit values win over the auto choice.
 
-**Use when:** leave it automatic.
-**Avoid when:** never set `anon` on a machine where the model barely fits —
-the copy needs real memory and the budget manager will shrink your expert
-cache to compensate.
+With **`anon`**, the engine also:
+
+- skips `MAP_POPULATE` on model load (llama fork),
+- copies non-expert weights to anonymous memory (~522 MiB for LFM2.5),
+- drops expert mmap RSS after the binding scan, and
+- when **stream is off**, trims expert pages each decode step so RSS stays
+  under a hard cap (demand-paged from disk on the next use).
+
+Disable mmap drop for A/B: `CNE_DENSE_DROP_MMAP=0`.
+
+**Use when:** 4 GiB hosts running MoE models, or R1+ where mmap thrashes.
+**Avoid when:** 16 GiB+ R0 velocity path — use `mmap` unless you measure anon winning.
 
 ## 4. Expert streaming (slice cache + O_DIRECT + I/O lanes)
 
@@ -273,14 +281,18 @@ numbers.
 **Avoid when:** comparing against numbers produced by different toolchains —
 absolute values are only comparable within the same harness and protocol.
 
-## 9. Prefetch overlap (`CNE_PREFETCH`)
+## 9. Prefetch overlap (`CNE_PREFETCH` / `prefetch`)
 
 **Status:** shipped, default OFF
 
-Speculatively fills expert slices for the next step using the previous
-step's routing. Measured as a no-op or regression on current hardware
-(adequate caching already captures routing locality, and the prefetcher
-contends with demand fills on the cache lock).
+Speculatively fills expert slices for the next decode step using the previous
+step's routing while **streaming** is on (`CNE_STREAM=1`). Measured as a no-op
+or regression on current hardware (adequate caching already captures routing
+locality, and the prefetcher contends with demand fills on the cache lock).
+
+**Config:** `"prefetch": true` or `false` in `models/server.json` (`cne_setup` always
+writes the boolean; default off). Or `CNE_PREFETCH=1` / `lookahead` env. Ignored
+when `stream` is off. Advanced: `CNE_PREFETCH=full`.
 
 **Use when:** essentially never today; revisit on machines where fills are
 cheap relative to compute (very fast storage) or models far beyond cache
@@ -311,10 +323,12 @@ One toggle controls all fork hooks in `ggml-cpu/repack.cpp`. Tokens stay
 identical whether on or off; only the CPU kernel path changes.
 
 **Validated:** LFM2-24B-A2B prepared Q4_K_M (+10.6% tg250 vs `CNE_KERNELS=0`).
+**LFM2.5-8B-A1B** UD-Q4_K_XL (+16.8% tg250, 2026-08-31) — see
+**docs/models/lfm2.5-8b-a1b.md**.
 
 **Likely compatible** (same top-4 MoE `mul_mat_id` pattern; not bench'd here yet):
 
-- **LFM2 MoE variants** — `lfm2moe` arch, e.g. LFM2-8B-A1B, LFM2.5-8B-A1B
+- **LFM2 MoE variants** — `lfm2moe` arch, e.g. LFM2-8B-A1B (LFM2.5 validated separately)
 - **SmallThinker MoE** — `smallthinker` arch, `expert_used_count=4`, separate gate/up/down tensors
 
 Run `cne_identity_gate` on any new artifact before velocity claims.
@@ -377,6 +391,7 @@ Server-specific knobs:
 |---|---|
 | `CNE_THINK=0` | thinking off by default (requests may re-enable via `chat_template_kwargs.enable_thinking`) |
 | `CNE_STREAM=0` | naive mmap decode - measured faster at ~1.4x RAM; streaming pays above ~1.6x |
+| `CNE_PREFETCH=1` | prefetch overlap during streaming (default off); see §9 |
 | `CNE_KERNELS=0` | stock llama.cpp ggml-cpu path (A/B); default on when unset |
 | `CNE_CACHE_GIB=N` | expert cache cap before budget clamping |
 | `CNE_MAX_REQ_S=N` | wall budget per request in seconds; loud abort on exceed (default off) |
@@ -391,13 +406,17 @@ Server-specific knobs:
 | `CNE_API_RPM` | N | Per-user requests/minute (0 = off) |
 | `CNE_SESSION_MAX_PER_USER` | N | Max parked chats per user (default 2 in API mode) |
 
-Config file keys: `api_mode`, `api_keys` (array), `api_keys_file`, `api_rpm`,
-`session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
+Config file keys: `stream`, `prefetch`, `kernels`, `dense`, `ctx`, `threads`,
+`mtp`, `cache_gib`, `session_max`, `api_mode`, `api_keys` (array),
+`api_keys_file`, `api_rpm`, `session_max_per_user`. See `tools/api_keys.example.txt` and **docs/GATEWAY.md**
 for the two-tier key model (internal vs client keys).
 
 **Public API:** run **`cne_gateway`** in front of API-mode `cne_server` on
 `127.0.0.1`. Clients never call `cne_server` directly. Gateway docs:
 **docs/GATEWAY.md** · serving architecture: **docs/SERVING.md**.
+
+Gateway chat policy (`gateway.json`): `allow_thinking` (block client thinking
+override), `max_tokens_per_request` (per-answer token cap).
 
 Multi-turn KV reuse: send the same `conversation_id` on each turn (JSON
 field or `X-Conversation-Id` header). Turn 2+ prefills only the new prompt
@@ -427,7 +446,7 @@ The server also consumes a confirmed config file written by `cne-setup`
 (`models/server.json`): precedence is environment variable > config file >
 built-in default, and every resolved knob is logged with its source at
 boot. Supported keys include `stream`, `kernels`, `dense`, `mtp`, `threads`,
-`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`. See **docs/SETUP.md**.
+`ctx`, `think`, `cache_gib`, `max_req_s`, `session_max`, `prefetch`. See **docs/SETUP.md**.
 
 Behavior notes:
 

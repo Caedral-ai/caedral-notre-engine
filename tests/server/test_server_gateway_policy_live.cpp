@@ -1,4 +1,5 @@
-// HTTP E2E: API-key gateway → cne_server. Config: server_gateway_live.json
+// HTTP E2E: gateway chat policy (thinking block, max_tokens cap).
+// Config: server_gateway_policy_live.json
 #include "e2e_config.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -31,7 +32,7 @@ class ChildProcess {
 public:
     bool start_server(const std::string& model, int port,
                       const std::unordered_map<std::string, std::string>& env) {
-        return start_impl(env, [&](pid_t) {
+        return start_impl(env, [&] {
             const std::string host = "127.0.0.1";
             const std::string port_s = std::to_string(port);
             execl(CNE_SERVER_EXE, "cne_server", model.c_str(), host.c_str(),
@@ -42,7 +43,7 @@ public:
     bool start_gateway(const std::string& python,
                        const std::string& pythonpath, int port,
                        const std::unordered_map<std::string, std::string>& env) {
-        return start_impl(env, [&](pid_t) {
+        return start_impl(env, [&] {
             setenv("PYTHONPATH", pythonpath.c_str(), 1);
             setenv("CNE_GATEWAY_PORT", std::to_string(port).c_str(), 1);
             setenv("CNE_GATEWAY_HOST", "127.0.0.1", 1);
@@ -79,30 +80,20 @@ private:
         pid_ = fork();
         if (pid_ < 0) return false;
         if (pid_ == 0) {
-            log_path_ = "/tmp/cne_gw_child_" + std::to_string(getpid()) + ".log";
+            log_path_ = "/tmp/cne_gw_policy_child_" + std::to_string(getpid()) + ".log";
             FILE* log = freopen(log_path_.c_str(), "w", stderr);
             (void) log;
             for (const auto& kv : env) setenv(kv.first.c_str(), kv.second.c_str(), 1);
-            child_fn(pid_);
+            child_fn();
             _exit(127);
         }
-        log_path_ = "/tmp/cne_gw_child_" + std::to_string(pid_) + ".log";
+        log_path_ = "/tmp/cne_gw_policy_child_" + std::to_string(pid_) + ".log";
         return true;
     }
 
     pid_t       pid_ = -1;
     std::string log_path_;
 };
-
-std::string read_file(const std::string& path) {
-    std::ifstream in(path);
-    return std::string((std::istreambuf_iterator<char>(in)),
-                       std::istreambuf_iterator<char>());
-}
-
-bool log_contains(const std::string& path, const char* needle) {
-    return read_file(path).find(needle) != std::string::npos;
-}
 
 std::string find_gateway_python(const std::string& src) {
     if (const char* p = getenv("CNE_GATEWAY_PYTHON")) {
@@ -162,19 +153,6 @@ bool wait_gateway_health(httplib::Client& cli, int timeout_s) {
     return false;
 }
 
-json chat_body(const std::string& model, const json& messages,
-               const std::string& chat_id, int max_tokens, bool think_off) {
-    json body = {{"model", model},
-                 {"messages", messages},
-                 {"max_tokens", max_tokens},
-                 {"temperature", 0},
-                 {"stream", false},
-                 {"chat_id", chat_id}};
-    if (think_off)
-        body["chat_template_kwargs"] = {{"enable_thinking", false}};
-    return body;
-}
-
 bool post_json(httplib::Client& cli, const std::string& path,
                const httplib::Headers& hdrs, const json& body, int expect,
                std::string& err, json* out = nullptr) {
@@ -198,24 +176,84 @@ bool post_json(httplib::Client& cli, const std::string& path,
     return true;
 }
 
+bool check_health_policy(httplib::Client& gw_cli, std::string& err) {
+    auto res = gw_cli.Get("/health");
+    if (!res || res->status != 200) {
+        err = "health request failed";
+        return false;
+    }
+    try {
+        json j = json::parse(res->body);
+        const json& gw = j.at("gateway");
+        if (gw.value("allow_thinking", true)) {
+            err = "expected gateway.allow_thinking=false";
+            return false;
+        }
+        if (gw.value("max_tokens_per_request", 0) != 8) {
+            err = "expected gateway.max_tokens_per_request=8";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        err = e.what();
+        return false;
+    }
+    return true;
+}
+
+bool check_thinking_blocked(httplib::Client& gw_cli,
+                            const httplib::Headers& auth, std::string& err) {
+    json body = {{"messages", json::array({{{"role", "user"}, {"content", "hi"}}})},
+                 {"stream", false},
+                 {"chat_template_kwargs", {{"enable_thinking", true}}}};
+    return post_json(gw_cli, "/v1/chat/completions", auth, body, 403, err);
+}
+
+bool check_max_tokens_clamped(httplib::Client& gw_cli,
+                              const httplib::Headers& auth,
+                              const std::string& chat_id, bool include_max_tokens,
+                              std::string& err) {
+    json body = {{"messages",
+                  json::array({{{"role", "user"},
+                                {"content",
+                                 "List ten European capital cities with one "
+                                 "sentence each."}}})},
+                 {"stream", false},
+                 {"temperature", 0},
+                 {"chat_id", chat_id}};
+    if (include_max_tokens) body["max_tokens"] = 64;
+
+    json resp;
+    if (!post_json(gw_cli, "/v1/chat/completions", auth, body, 200, err, &resp))
+        return false;
+
+    if (!resp.contains("usage") || !resp["usage"].contains("completion_tokens")) {
+        err = "missing usage.completion_tokens";
+        return false;
+    }
+    const int completion = resp["usage"]["completion_tokens"].get<int>();
+    if (completion > 8) {
+        err = "completion_tokens=" + std::to_string(completion) + " exceeds cap 8";
+        return false;
+    }
+    return true;
+}
+
 int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
              const std::string& project_src) {
     const std::string python = find_gateway_python(project_src);
     const std::string pythonpath = project_src + "/gateway";
     if (python.empty() || !gateway_import_ok(python, pythonpath)) {
         fprintf(stderr,
-                "skip: server_gateway live (install gateway: "
+                "skip: server_gateway_policy live (install gateway: "
                 "cd gateway && python -m venv .venv && pip install -r "
                 "requirements.txt)\n");
         return 0;
     }
 
     const int server_port =
-        cfg.port > 0 ? cfg.port : 20000 + (int) (getpid() % 2000);
+        cfg.port > 0 ? cfg.port : 21000 + (int) (getpid() % 2000);
     const int gateway_port =
         cfg.gateway.port > 0 ? cfg.gateway.port : server_port + 1;
-    const int max_tok = cfg.chat.max_tokens > 0 ? cfg.chat.max_tokens : 12;
-    const std::string chat_id = cfg.chat.chat_id;
 
     std::unordered_map<std::string, std::string> gw_env = cfg.gateway.env;
     gw_env["CNE_UPSTREAM"] = "http://127.0.0.1:" + std::to_string(server_port);
@@ -252,15 +290,6 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
         return 1;
     }
 
-    std::string err;
-    json body = chat_body("ignored", json::array({ {{"role", "user"},
-                                                  {"content", "The capital of France is"}} }),
-                          chat_id, max_tok, cfg.chat.think_off);
-    if (!post_json(gw_cli, "/v1/chat/completions", {}, body, 401, err)) {
-        fprintf(stderr, "FAIL: expected 401 without API key (%s)\n", err.c_str());
-        return 1;
-    }
-
     if (cfg.gateway.client_api_key.empty()) {
         fprintf(stderr, "FAIL: gateway.client_api_key not set in e2e config\n");
         return 1;
@@ -270,43 +299,30 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
         {"Content-Type", "application/json"},
     };
 
-    json turn1;
-    if (!post_json(gw_cli, "/v1/chat/completions", auth, body, 200, err,
-                   &turn1)) {
-        fprintf(stderr, "FAIL: turn-1 chat (%s)\n", err.c_str());
+    std::string err;
+    if (!check_health_policy(gw_cli, err)) {
+        fprintf(stderr, "FAIL: health policy (%s)\n", err.c_str());
         return 1;
     }
-    const std::string content1 =
-        turn1["choices"][0]["message"]["content"].get<std::string>();
-    if (content1.empty()) {
-        fprintf(stderr, "FAIL: empty turn-1 content\n");
+    if (!check_thinking_blocked(gw_cli, auth, err)) {
+        fprintf(stderr, "FAIL: thinking policy (%s)\n", err.c_str());
         return 1;
     }
-
-    json messages2 = json::array(
-        { {{"role", "user"}, {"content", "The capital of France is"}},
-          {{"role", "assistant"}, {"content", content1}},
-          {{"role", "user"}, {"content", "Name one river in that city."}} });
-    json body2 =
-        chat_body("ignored", messages2, chat_id, max_tok, cfg.chat.think_off);
-    json turn2;
-    if (!post_json(gw_cli, "/v1/chat/completions", auth, body2, 200, err,
-                   &turn2)) {
-        fprintf(stderr, "FAIL: turn-2 chat (%s)\n", err.c_str());
+    if (!check_max_tokens_clamped(gw_cli, auth, cfg.chat.chat_id + "-clamp",
+                                  true, err)) {
+        fprintf(stderr, "FAIL: max_tokens clamp (%s)\n", err.c_str());
         return 1;
     }
-
-    if (!log_contains(cne.log_path(), "reused=")) {
-        fprintf(stderr,
-                "FAIL: turn-2 did not log CNE session KV reuse (see %s)\n",
-                cne.log_path().c_str());
+    if (!check_max_tokens_clamped(gw_cli, auth, cfg.chat.chat_id + "-default",
+                                  false, err)) {
+        fprintf(stderr, "FAIL: max_tokens default (%s)\n", err.c_str());
         return 1;
     }
 
     gw.stop();
     cne.stop();
-    printf("server_gateway live: OK (cne=%d gateway=%d chat=%s)\n",
-           server_port, gateway_port, chat_id.c_str());
+    printf("server_gateway_policy live: OK (cne=%d gateway=%d)\n", server_port,
+           gateway_port);
     return 0;
 }
 
@@ -315,7 +331,7 @@ int run_live(const cne::e2e::Config& cfg, const std::string& model_path,
 int main() {
     const std::string src = CNE_PROJECT_SOURCE_DIR;
     const std::string cfg_path =
-        cne::e2e::discover_path("tests/e2e/server_gateway_live.json", src);
+        cne::e2e::discover_path("tests/e2e/server_gateway_policy_live.json", src);
 
     cne::e2e::Config cfg;
     std::string err;
@@ -328,18 +344,20 @@ int main() {
 
     const std::string model = cne::e2e::resolve_model(cfg, src);
     if (model.empty()) {
-        printf("skip: server_gateway live (set model in %s or CNE_TEST_MODEL)\n",
+        printf("skip: server_gateway_policy live (set model in %s or "
+               "CNE_TEST_MODEL)\n",
                cfg_path.c_str());
         return 0;
     }
     if (access(model.c_str(), R_OK) != 0) {
-        printf("skip: server_gateway live (model not found: %s)\n",
+        printf("skip: server_gateway_policy live (model not found: %s)\n",
                model.c_str());
         return 0;
     }
     if (cfg.gateway.api_keys_file.empty() ||
         access(cfg.gateway.api_keys_file.c_str(), R_OK) != 0) {
-        printf("skip: server_gateway live (gateway api_keys file missing: %s)\n",
+        printf("skip: server_gateway_policy live (gateway api_keys file missing: "
+               "%s)\n",
                cfg.gateway.api_keys_file.c_str());
         return 0;
     }

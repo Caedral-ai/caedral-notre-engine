@@ -44,6 +44,9 @@ ggml_backend_sched_eval_callback stream_cb_eval();
 // end after it (memory must be cleared by the driver).
 void   stream_anon_scan_begin();
 void   stream_anon_scan_end();
+// After anon scan: drop file-backed RSS for dense mmap sources and cold expert
+// weights (MADV_DONTNEED). Required for sub-file-size RAM targets.
+size_t stream_anon_finalize();
 size_t stream_dense_bound_count();
 size_t stream_dense_anon_bytes();
 

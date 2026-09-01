@@ -235,6 +235,7 @@ bool runtime_load_llama(Runtime& rt, const RuntimeSettings& s) {
         llama_memory_clear(llama_get_memory(rt.ctx), true);
         printf("dense=anon: %zu tensors bound, %zu MiB anonymous\n",
                stream_dense_bound_count(), stream_dense_anon_bytes() >> 20);
+        stream_anon_finalize();
     }
     return true;
 }

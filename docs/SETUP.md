@@ -32,11 +32,13 @@ artifact:
 ```sh
 ./tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh   # reference model (~22.9 GB)
 ./tools/scripts/download-lfm2-24b-a2b.sh              # LFM2-24B-A2B, no-stream profile (~14.4 GB)
+./tools/scripts/download-lfm2.5-8b-a1b.sh             # LFM2.5-8B-A1B AtomicChat UD-Q4_K_XL (~5.2 GB)
 ```
 
 Both scripts verify sha256 and run the one-time alignment pass
 (`cne_prepare`). Prepared artifacts are listed first by `cne-setup` and
-marked `-prepared.gguf`. Per-model profiles: see `docs/models/`.
+marked `-prepared.gguf`. Per-model profiles: `docs/models/lfm2-24b-a2b.md`,
+`docs/models/lfm2.5-8b-a1b.md`, `docs/models/qwen3.6-35b-a3b-q4_k_xl.md`.
 
 The download script ends by running the one-time alignment pass
 (`cne_prepare`) that expert streaming requires. Prepared artifacts are
@@ -92,6 +94,7 @@ Accepted value grammars:
 | Setting | Values |
 |---|---|
 | stream decode | `on` \| `off` |
+| prefetch overlap (`prefetch`) | `on` \| `off`; streaming only — maps to `CNE_PREFETCH` (default off) |
 | dense residency | `mmap` \| `warm` \| `anon` \| empty = engine auto |
 | MTP draft depth | whole number >= 0 (0 = off) |
 | threads | whole number >= 1 |
@@ -117,6 +120,8 @@ Suggestions come from measurements on the reference machine/hardware class
 
 - **stream off** below R3 - the expert cache already holds the hot set;
   naive mmap decode measured equal-or-better there
+- **prefetch off** — speculative expert I/O overlap during streaming;
+  default off (measured neutral/regressive); only applies when `stream` is on
 - **dense mmap** when MTP is active - measured win under speculation-era
   memory footprints
 - **MTP 8** (p_min 0.5) when the artifact carries MTP tensors AND the
@@ -128,6 +133,11 @@ Suggestions come from measurements on the reference machine/hardware class
 - **LFM2-24B-A2B** (no MTP tensors) - stream off, dense `warm`, kernels on,
   4 threads, ctx 4096; streaming measured slower at this RAM ratio (~1.4×). See
   `docs/models/lfm2-24b-a2b.md`
+- **LFM2.5-8B-A1B** — on **≤ 4 GiB** hosts: stream off, dense **`anon`**, t4,
+  ctx 1024 (~11 tok/s @ 250 tok, ~2.9 GiB peak). Streaming + 3 GiB cache:
+  t4, **`CNE_LANES=2`** (~9 tok/s). On **16 GiB+**: stream off, dense `mmap`,
+  t4, ctx 2048 (~12 tok/s). **Avoid 8 threads** on both paths. See
+  `docs/models/lfm2.5-8b-a1b.md`
 - **conversation lanes** (`session_max`) - when MTP is off, typically 2 (3 on
   comfortable RAM); 1 when MTP is on or memory is tight. Sets `CNE_SESSION_MAX`
   and splits total `ctx` evenly across lanes (`ctx / session_max` tokens per
@@ -172,6 +182,8 @@ speed, use `"mtp": 8`, `"mtp_p_min": 0.5`, omit `session_max` or set it to
 Notes:
 
 - `model` is relative to the config file's directory
+- `prefetch` is written as `true`/`false` (default off); requires `"stream": true`
+  to have any effect — maps to `CNE_PREFETCH=1` / `lookahead`
 - keys left at engine default are omitted entirely - every key present in
   the file traces back to a choice you confirmed
 
@@ -233,11 +245,14 @@ cp gateway/api_keys.example.txt gateway/api_keys.local.txt
 |---|---|
 | `models/server.json` | Engine knobs + `api_mode` |
 | `models/api_keys.txt` | **Internal** key (gateway → engine only) |
-| `gateway/gateway.json` | Gateway listen port, upstream, internal key |
+| `gateway/gateway.json` | Gateway listen port, upstream, internal key, **chat policy** (`allow_thinking`, `max_tokens_per_request`) |
 | `gateway/api_keys.local.txt` | **Client** keys (`<key> <user_id>` per line) |
 
 Clients call `http://<gateway>:8090/v1/...` with
 `Authorization: Bearer <client-api-key>` and `X-Chat-Id` (or JSON `chat_id`).
+
+Chat policy (thinking block, per-answer token cap) is configured in
+`gateway/gateway.json` — see **docs/GATEWAY.md** §2 (Chat policy).
 
 Install gateway deps once: `cd gateway && python -m venv .venv && pip install -r requirements.txt`.
 

@@ -64,7 +64,7 @@ bool valid_value(const std::string& key, const std::string& v,
 
     if (v.empty()) return true;   // '!' cleared -> engine default
     if (key == "stream" || key == "think" || key == "kernels" ||
-        key == "api_mode") {
+        key == "api_mode" || key == "prefetch") {
         if (v != "on" && v != "off" && v != "0" && v != "1") return false;
         return true;
     }
@@ -159,6 +159,10 @@ std::vector<Item> build_suggestions(const fs::path& artifact,
         deep ? "model far above RAM - streaming is the product here"
              : "cache holds the hot set at this regime; naive mmap decode "
                "measured equal-or-better");
+
+    add("prefetch", "prefetch overlap", "off",
+        "speculative expert prefetch during streaming; default off "
+        "(measured neutral/regressive on current hardware)");
 
     add("kernels", "custom CPU kernels", "on",
         "fork ggml-cpu fast path; off = stock llama A/B");
@@ -401,10 +405,11 @@ int main(int argc, char** argv) {
     std::string api_keys_rel = "api_keys.txt";
     for (const auto& it : items) {
         if (it.value.empty()) continue;
-        if (it.key == "stream" || it.key == "think" || it.key == "kernels")
+        if (it.key == "stream" || it.key == "think" || it.key == "kernels" ||
+            it.key == "prefetch") {
             cfg[it.key] = (it.value == "on" || it.value == "1" ||
                            it.value == "true");
-        else if (it.key == "api_mode") {
+        } else if (it.key == "api_mode") {
             api_on = (it.value == "on" || it.value == "1" ||
                       it.value == "true");
             if (api_on) cfg[it.key] = true;
@@ -451,6 +456,22 @@ int main(int argc, char** argv) {
     if (mtp_k > 0) cfg["mtp_p_min"] = 0.5;   // measured pairing, SERVER.md §6
 
     {
+        bool stream_on = false, prefetch_on = false;
+        for (const auto& it : items) {
+            if (it.key == "stream")
+                stream_on = (it.value == "on" || it.value == "1" ||
+                             it.value == "true");
+            if (it.key == "prefetch")
+                prefetch_on = (it.value == "on" || it.value == "1" ||
+                               it.value == "true");
+        }
+        if (prefetch_on && !stream_on)
+            fprintf(stderr,
+                    "[setup] prefetch overlap only applies when stream is on "
+                    "(ignored at boot)\n");
+    }
+
+    {
         std::ofstream f(config_path);
         if (!f) {
             fprintf(stderr, "cannot write %s\n", config_path.string().c_str());
@@ -469,6 +490,7 @@ int main(int argc, char** argv) {
     for (const auto& it : items) {
         if (it.value.empty()) continue;
         if (it.key == "stream")         kv("CNE_STREAM", env_on(it.value));
+        else if (it.key == "prefetch")  kv("CNE_PREFETCH", env_on(it.value));
         else if (it.key == "kernels")   kv("CNE_KERNELS", env_on(it.value));
         else if (it.key == "dense")     kv("CNE_DENSE", it.value);
         else if (it.key == "mtp")       kv("CNE_MTP", it.value);

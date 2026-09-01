@@ -55,11 +55,13 @@ Python FastAPI proxy for public multi-user APIs (**docs/GATEWAY.md**):
 |---|---|
 | `cne_gateway/main.py` | Routes, health, lifespan |
 | `cne_gateway/auth.py` | Client API key load + per-user RPM |
+| `cne_gateway/policy.py` | Chat policy: `allow_thinking`, `max_tokens_per_request` |
 | `cne_gateway/proxy.py` | Forward to `cne_server` with internal key + `X-User-Id` |
 | `cne_gateway/config.py` | `gateway.json` + env |
 | `gateway.json.example` | Operator config template |
 | `api_keys.example.txt` | Client key file format |
-| `tests/test_gateway.py` | Unit tests (mocked upstream) |
+| `tests/test_gateway.py` | Unit tests (auth, proxy, config) |
+| `tests/test_policy.py` | Unit tests (chat policy) |
 
 Not built by CMake; run via `tools/scripts/run-gateway.sh` or
 `python -m cne_gateway`.
@@ -86,7 +88,7 @@ Velocity microbenches live under `bench/`, not `tools/`.
 | `boot/` | Runtime boot sequence (synthetic + optional live model) |
 | `session/` | Session KV reuse (`session_lcp`, `session_kv_live`, `session_bigctx_live`, `session_tenant`) |
 | `api/` | API auth helpers (`api_unit`) |
-| `server/` | HTTP E2E (`server_e2e_live`, `server_api_live`, `server_gateway_live`, …) |
+| `server/` | HTTP E2E (`server_e2e_live`, `server_api_live`, `server_gateway_live`, `server_gateway_policy_live`, …) |
 | `perplexity/` | PL drift-gate unit tests (`drift_gate.py`) |
 
 Live tests are opt-in: they skip when the GGUF from the JSON config is

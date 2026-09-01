@@ -175,3 +175,75 @@ B4 prepare-time gate‖up fusion passed identity but was **slower than the custo
 kernel path** and was reverted. Next lossless kernel work: shortconv GEMV (~14%
 decode wall per graph census), optional AVX-VNNI `4vx` inner loop — see
 [models/lfm2-24b-a2b.md](models/lfm2-24b-a2b.md) § Kernel roadmap.
+
+## LFM2.5-8B-A1B (4 GiB + velocity artifact)
+
+AtomicChat UD-Q4_K_XL, no MTP. Full profile:
+[models/lfm2.5-8b-a1b.md](models/lfm2.5-8b-a1b.md).
+
+### Measured (i5-1135G7-class, prepared UD-Q4_K_XL, 2026-08-31)
+
+**64-token smoke** (`memory-profile.sh` / short `cne_bench`):
+
+| profile | RSS (HWM) | tok/s | tool / config |
+|---|---|---|---|
+| **4 GiB — anon, stream off** | **~2.9 GiB** | **~12** | ctx 1024, t4 |
+| 4 GiB — anon, stream on, 3 GiB cache | ~3.8 GiB | ~7.6 | 90% hit-rate |
+| 16 GiB — mmap-dense, stream off | ~4.94 GiB | **~18** | ctx 2048, t4 |
+| mmap + stream 1 GiB (legacy) | ~6.2 GiB | ~1.9 | do not use for 4 GiB |
+
+**250-token sustained decode** (`cne_bench`, greedy, `CNE_IGNORE_EOS=1`,
+`CNE_KERNELS=1`, `CNE_PREFETCH=0`):
+
+| profile | RSS (HWM) | tok/s | hit % | notes |
+|---|---|---|---|---|
+| **anon, stream off, t4 ctx 1024** | **2.89 GiB** | **11.1** | — | **4 GiB tuned** |
+| mmap-dense, stream off, t4 ctx 2048 | 4.96 GiB | **12.0** | — | **16 GiB+ tuned** |
+| anon, stream on, **3 GiB**, t4 **lanes 2** | **4.31 GiB** | **11.14** | **96.9** | tuned streaming |
+| anon, stream on, **2 GiB**, t4 lanes 4 | 3.65 GiB | 4.65 | 82.9 | below 90% rule |
+
+**Expert cache sweep** (stream on, anon, t4, ctx 1024, 250 tok): **3 GiB /
+lanes 2 → 11.14 tok/s** (97% hit) vs **2 GiB / lanes 4 → 4.65 tok/s** (83% hit).
+Full table: [models/lfm2.5-8b-a1b.md](models/lfm2.5-8b-a1b.md) §5.
+
+**Kernel A/B** (`llama-bench` tg250, t4, pp512, 5 reps, `CNE_STREAM=0`):
+
+| `CNE_KERNELS` | tg250 tok/s |
+|---|---|
+| **1** | **14.79 ± 0.23** |
+| 0 | 12.66 ± 0.11 |
+| delta | **+16.8%** |
+
+Harness: `./bench/scripts/lfm2.5/tg250-kernel-ab.sh` ·
+`./bench/scripts/lfm2.5/memory-profile.sh` → `bench/results/lfm25-*.tsv`.
+
+### Reproduce
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+./tools/scripts/download-lfm2.5-8b-a1b.sh
+
+# 4 GiB — anon, no stream, tuned (t4, ctx 1024): ~11.1 tok/s, ~2.9 GiB peak
+CNE_STREAM=0 CNE_DENSE=anon CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+
+# 4 GiB — anon + 3 GiB stream cache, tuned (t4, lanes 2, prefetch off): ~11.1 tok/s, ~4.3 GiB peak
+CNE_STREAM=1 CNE_CACHE_GIB=3 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=2 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 3 250 250 1
+
+# 2 GiB stream cache — not recommended (~4.7 tok/s, 83% hit)
+CNE_STREAM=1 CNE_CACHE_GIB=2 CNE_KERNELS=1 CNE_PREFETCH=0 CNE_THREADS=4 CNE_LANES=4 \
+  CNE_DENSE=anon CNE_CTX=1024 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 2 250 250 1
+
+# 16 GiB+ — mmap, no stream, tuned (t4, ctx 2048): ~12.0 tok/s
+CNE_STREAM=0 CNE_DENSE=mmap CNE_KERNELS=1 CNE_THREADS=4 CNE_CTX=2048 CNE_IGNORE_EOS=1 \
+  ./build/tools/cne_bench \
+  models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf 0 250 250 0
+```
+
+Disable mmap drop (debug): `CNE_DENSE_DROP_MMAP=0`.

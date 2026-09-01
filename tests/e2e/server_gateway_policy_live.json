@@ -1,0 +1,27 @@
+{
+  "description": "Gateway chat policy live E2E (thinking block, max_tokens cap)",
+  "model": "",
+  "env": {
+    "CNE_MTP": "0",
+    "CNE_STREAM": "0",
+    "CNE_CTX": "2048",
+    "CNE_SESSION_MAX": "2",
+    "CNE_API_MODE": "1",
+    "CNE_API_KEY": "e2e-test-secret",
+    "CNE_THINK": "1"
+  },
+  "gateway": {
+    "env": {
+      "CNE_INTERNAL_API_KEY": "e2e-test-secret",
+      "CNE_GATEWAY_ALLOW_THINKING": "0",
+      "CNE_GATEWAY_MAX_TOKENS": "8"
+    },
+    "api_keys_file": "gateway/api_keys.example.txt",
+    "client_api_key": "cne_sk_alice_dev_replace_me_in_production"
+  },
+  "chat": {
+    "chat_id": "e2e-gw-policy",
+    "think_off": false
+  },
+  "boot_timeout_s": 180
+}
