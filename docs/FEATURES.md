@@ -290,8 +290,9 @@ step's routing while **streaming** is on (`CNE_STREAM=1`). Measured as a no-op
 or regression on current hardware (adequate caching already captures routing
 locality, and the prefetcher contends with demand fills on the cache lock).
 
-**Config:** `"prefetch": true` in `models/server.json` (or `CNE_PREFETCH=1` /
-`lookahead` env). Ignored when `stream` is off. Advanced: `CNE_PREFETCH=full`.
+**Config:** `"prefetch": true` or `false` in `models/server.json` (`cne_setup` always
+writes the boolean; default off). Or `CNE_PREFETCH=1` / `lookahead` env. Ignored
+when `stream` is off. Advanced: `CNE_PREFETCH=full`.
 
 **Use when:** essentially never today; revisit on machines where fills are
 cheap relative to compute (very fast storage) or models far beyond cache

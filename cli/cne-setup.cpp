@@ -405,13 +405,10 @@ int main(int argc, char** argv) {
     std::string api_keys_rel = "api_keys.txt";
     for (const auto& it : items) {
         if (it.value.empty()) continue;
-        if (it.key == "stream" || it.key == "think" || it.key == "kernels") {
+        if (it.key == "stream" || it.key == "think" || it.key == "kernels" ||
+            it.key == "prefetch") {
             cfg[it.key] = (it.value == "on" || it.value == "1" ||
                            it.value == "true");
-        } else if (it.key == "prefetch") {
-            const bool on = (it.value == "on" || it.value == "1" ||
-                             it.value == "true");
-            if (on) cfg[it.key] = true;
         } else if (it.key == "api_mode") {
             api_on = (it.value == "on" || it.value == "1" ||
                       it.value == "true");

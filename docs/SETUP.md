@@ -182,7 +182,7 @@ speed, use `"mtp": 8`, `"mtp_p_min": 0.5`, omit `session_max` or set it to
 Notes:
 
 - `model` is relative to the config file's directory
-- `prefetch` is omitted when off (engine default); requires `"stream": true`
+- `prefetch` is written as `true`/`false` (default off); requires `"stream": true`
   to have any effect — maps to `CNE_PREFETCH=1` / `lookahead`
 - keys left at engine default are omitted entirely - every key present in
   the file traces back to a choice you confirmed

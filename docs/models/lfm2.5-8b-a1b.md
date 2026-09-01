@@ -314,6 +314,7 @@ Example `models/server.json` for **4 GiB** (single-session, fastest):
 {
   "model": "lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf",
   "stream": false,
+  "prefetch": false,
   "dense": "anon",
   "ctx": 1024,
   "threads": 4,
