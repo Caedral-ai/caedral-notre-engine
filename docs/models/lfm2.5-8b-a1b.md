@@ -332,7 +332,7 @@ Common:
 |---|---|---|
 | `session_max` | 2 | splits `ctx` evenly per parked chat |
 | `mtp` | 0 | no MTP head in this GGUF |
-| `think` | off for APIs | `CNE_THINK=0` or `enable_thinking: false` per request; with **`cne_gateway`**, set `"allow_thinking": false` in `gateway.json` so clients cannot override |
+| `think` | off for APIs | `"think": false` in `server.json` (or `CNE_THINK=0`); per-request `"enable_thinking": false`. On **lfm2moe**, the server injects an empty closed `` block so the model skips reasoning (not just hide it). With **`cne_gateway`**, also set `"allow_thinking": false` in `gateway.json`. |
 
 ## 7. Quick start
 
