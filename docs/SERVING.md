@@ -198,6 +198,7 @@ this repo without waiting on engine work.
 - [x] `/health` exposes `api.*`, `n_ctx_per_seq`, queue + sessions
 - [x] Example nginx TLS/rate-limit config: `tools/nginx/cne_api.conf.example`
 - [x] `cne_setup` writes API mode fields + internal keys file
+- [x] Docker image + compose for `cne_server` only (**docs/DEPLOY.md**); gateway stays external
 - [ ] TLS termination in production (deploy nginx/Caddy — see example config)
 - [ ] Monitor `/health` queue depth in your orchestrator (poll `queue.waiting`)
 

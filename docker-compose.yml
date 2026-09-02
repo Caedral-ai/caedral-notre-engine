@@ -1,0 +1,26 @@
+# CNE engine only. Point your production gateway/API layer at cne_server :8080.
+#
+# Prerequisites:
+#   git submodule update --init --recursive
+#   ./build/cli/cne_setup   # writes models/server.json (enable api_mode for multi-user)
+#
+# Start:
+#   docker compose up --build -d
+#
+# Your gateway (nginx, Kong, custom service, cne_gateway on the host, etc.) should
+# call http://127.0.0.1:8080 on the host — see docs/DEPLOY.md §3.
+
+name: cne
+
+services:
+  cne_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cne-engine:local
+    restart: unless-stopped
+    volumes:
+      - ${CNE_MODELS_DIR:-./models}:/models:ro
+    ports:
+      # Localhost only: reachable by a gateway on the same machine, not the public internet.
+      - "127.0.0.1:${CNE_PORT:-8080}:8080"

@@ -19,6 +19,7 @@
 | Quantization | Unsloth Dynamic Q4_K_XL (imatrix-calibrated; mixed q4_k/q5_k/q6_k/q8_0/f32 per-tensor) |
 | Downloaded size | 22,853,663,008 bytes (~21.3 GiB) |
 | GGUF architecture key | `qwen35moe` |
+| Thinking | **Yes** — think blocks; **`"think": false` disables thinking** (server injects closed empty think block + strips output) |
 | Tensors | 753 (includes MTP prediction head) |
 | Regeneration script | `tools/scripts/download-qwen3.6-35b-a3b-q4_k_xl.sh` |
 

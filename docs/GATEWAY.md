@@ -104,10 +104,10 @@ the gateway unless you set `"allow_thinking": true` in `gateway.json`.
 
 | Policy | Config key | What it does |
 |---|---|---|
-| **Thinking** | `allow_thinking` | When `false` (default): gateway sets `chat_template_kwargs.enable_thinking: false` on every chat request. If a client sends `enable_thinking: true`, the gateway returns **403** and does not call the engine. When `true`: client value is passed through unchanged. |
+| **Thinking** | `allow_thinking` | When `false` (default): gateway sets `chat_template_kwargs.enable_thinking: false` on every chat request. If a client sends `enable_thinking: true`, the gateway returns **403** and does not call the engine. When `true`: client value is passed through unchanged. **LFM2.5 always thinks** — this policy does not disable reasoning on that model (see **docs/SETUP.md** §7.1). |
 | **Answer length** | `max_tokens_per_request` | When `> 0`: caps `max_tokens` per completion. Client values above the cap are **clamped**; omitted `max_tokens` is set to the cap. When `0` (default): no gateway limit (engine/client default applies). |
 
-**Thinking** (models such as LFM2.5 that support `` blocks):
+**Thinking** (Qwen3 on/off; LFM2.5 always reasons regardless of gateway policy):
 
 ```sh
 # Blocked when allow_thinking is false (default) — 403, no upstream call

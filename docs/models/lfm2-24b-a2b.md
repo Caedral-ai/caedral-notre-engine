@@ -13,7 +13,8 @@ architecture validated on the engine.
 | Architecture | `lfm2_moe`: 40 layers = 30 shortconv + 10 GQA attention |
 | Context | 32,768 native |
 | MTP | none — sequential arm only (`mtp_k=0`) |
-| Template | ChatML-like via the model's own Jinja; no think blocks |
+| Template | ChatML-like via the model's own Jinja; **no think blocks** |
+| Thinking | **None** — no think blocks; `"think"` in `server.json` has no effect on generation |
 | Download | `./tools/scripts/download-lfm2-24b-a2b.sh` (fetch + align, resumable) |
 
 ## Validation (2026-08-25, i5-1135G7 / 16 GB)

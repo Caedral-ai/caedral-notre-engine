@@ -1,0 +1,14 @@
+.git
+.github
+build
+models
+gateway/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+*.gguf
+*.o
+*.a
+bench/results
+.agent-tools
+.cursor

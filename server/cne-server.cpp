@@ -154,7 +154,8 @@ struct Engine {
     int                mtp_k     = 0;
     float              mtp_p_min = 0.0f;
     bool               think_default = true;   // CNE_THINK=0 flips the default
-    bool               arch_think_off_prefix = false;  // qwen3/lfm2moe: empty think block when off
+    bool               arch_qwen3_think_off = false;  // qwen3: empty think block when off
+    bool               arch_lfm2moe = false;            // lfm2moe: always emits thinking; never strip
     std::string        chat_template;   // empty = model default template
     double             max_req_s  = 0;  // CNE_MAX_REQ_S wall budget; 0 = off
     std::mutex         gen_mutex;       // single-decode: serialize generation
@@ -273,7 +274,7 @@ struct Emitter {
                 break;
             }
             out += full.substr(pos, b - pos);
-            pos   = e + 8;   // strlen("</think>")
+            pos   = e + 20;  // strlen("</think>")
             stripped = true;
         }
         if (stripped) {
@@ -761,9 +762,8 @@ void handle_chat(httplib::Response& res, const json& body,
         return;
     }
 
-    // Thinking off, Qwen3 / LFM2.5 (lfm2moe): inject a closed empty think block on
-    // the assistant prefix so the model skips reasoning and answers directly.
-    if (!think_enabled && eng.arch_think_off_prefix) {
+    // Thinking off, Qwen3-family: inject closed empty think block on assistant prefix.
+    if (!think_enabled && eng.arch_qwen3_think_off) {
         while (!rendered.empty() &&
                (rendered.back() == '\n' || rendered.back() == ' '))
             rendered.pop_back();
@@ -886,7 +886,7 @@ void handle_chat(httplib::Response& res, const json& body,
         st->prefill_stats = prefill_stats;
         st->emit     = { &st->emitter, &st->stream, {}, 0 };
         st->emit.deadline = deadline;
-        st->emitter.strip_think = !think_enabled;
+        st->emitter.strip_think = !think_enabled && !eng.arch_lfm2moe;
 
         // generation runs on the engine thread; provider drains as chunks
         submit_job([st, &eng, n_gen, temperature]() {
@@ -989,7 +989,7 @@ void handle_chat(httplib::Response& res, const json& body,
 
     // Non-streaming: submit and block until the engine thread is done.
     Emitter emitter;
-    emitter.strip_think = !think_enabled;
+    emitter.strip_think = !think_enabled && !eng.arch_lfm2moe;
     EmitCtx emit{ &emitter, nullptr, {}, 0 };
     emit.deadline = deadline;
     long long n = 0;
@@ -1083,13 +1083,15 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (!model_arg) {
-        // config-relative model paths
+        // Always resolve config-relative model paths (do not gate on exists —
+        // cwd is not guaranteed to be the config directory, e.g. in Docker).
         fs::path cfg_dir = fs::path(config_path).parent_path();
         fs::path mp(resolved_model);
-        if (!cfg_dir.empty() && mp.is_relative() &&
-            fs::exists(cfg_dir / mp))
-            resolved_model = (cfg_dir / mp).string();
+        if (!cfg_dir.empty() && mp.is_relative() && !mp.empty())
+            resolved_model = (cfg_dir / mp).lexically_normal().string();
     }
+
+    fprintf(stderr, "[server] model path: %s\n", resolved_model.c_str());
 
     g_engine.model_path = resolved_model;
 
@@ -1124,10 +1126,11 @@ int main(int argc, char** argv) {
     // artifact even though the key exists - do not trust it here.
     {
         const std::string& arch = rt->manifest.architecture;
-        g_engine.arch_think_off_prefix =
-            arch.rfind("qwen3", 0) == 0 || arch.rfind("lfm2moe", 0) == 0;
-        fprintf(stderr, "[server] arch=%s think_off_prefix=%d\n", arch.c_str(),
-                (int)g_engine.arch_think_off_prefix);
+        g_engine.arch_qwen3_think_off = arch.rfind("qwen3", 0) == 0;
+        g_engine.arch_lfm2moe = arch.rfind("lfm2moe", 0) == 0;
+        fprintf(stderr, "[server] arch=%s qwen3_think_off=%d lfm2moe=%d\n",
+                arch.c_str(), (int)g_engine.arch_qwen3_think_off,
+                (int)g_engine.arch_lfm2moe);
     }
     {
         auto pos  = g_engine.model_path.find_last_of('/');

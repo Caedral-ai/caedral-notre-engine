@@ -105,7 +105,7 @@ Accepted value grammars:
 | API rate limit (`api_rpm`) | requests/minute per user; 0 = off |
 | internal keys file (`api_keys_file`) | path relative to models dir (gateway secret) |
 | expert cache cap | GiB number; empty or 0 = budget manager clamps |
-| thinking default | `on` \| `off` |
+| thinking default | `on` \| `off` — see **§7.1 Thinking**; only Qwen3-family models honor a true no-think mode |
 | wall cap per request | seconds, 0 = off |
 | host | IP or hostname |
 | port | 1-65535 |
@@ -256,6 +256,11 @@ Chat policy (thinking block, per-answer token cap) is configured in
 
 Install gateway deps once: `cd gateway && python -m venv .venv && pip install -r requirements.txt`.
 
+### Docker (engine only)
+
+Container image for `cne_server` only — mount `models/` and plug your own
+gateway in front: **docs/DEPLOY.md**.
+
 ## 7. Automated live tests
 
 With the LFM2 artifact on disk:
@@ -274,6 +279,22 @@ ctest --test-dir build -R server_gateway_live --output-on-failure
 Edit env knobs in `tests/e2e/*.json` instead of exporting long `CNE_*` lists.
 Full matrix: **docs/TESTING.md**.
 
+## 7.1 Thinking (`think` in `server.json`)
+
+Which models support reasoning blocks, and what `"think": false` actually does.
+
+| Model | GGUF arch | Thinking | `"think": false` |
+|---|---|---|---|
+| **Qwen3.6-35B-A3B** | `qwen35moe` (`qwen3*`) | Optional — on/off via template + server | **Works** — closed empty think block; strips think content when off |
+| **LFM2.5-8B-A1B** | `lfm2moe` | **Always on** — model always reasons | **Ignored** — thinking is always generated and **always returned** in API responses; `think` / `enable_thinking` do not disable it |
+| **LFM2-24B-A2B** | `lfm2moe` | **None** — no think blocks in template | **N/A** — knob has no effect |
+
+Per-request `chat_template_kwargs.enable_thinking` applies to **Qwen3 only**. On **LFM2.5**, expect think blocks (or plain-text reasoning) in every reply — budget `max_tokens` accordingly (128+ for short answers).
+
+**API serving:** set `"think": false` for **Qwen3.6** public APIs. For **LFM2.5**, do not rely on `think: false` — the model always thinks; use **LFM2-24B** or **Qwen3.6** if you need responses without a reasoning phase. With **`cne_gateway`**, `allow_thinking: false` blocks clients from requesting thinking on Qwen but does not change LFM2.5 behavior.
+
+Model-specific notes: **docs/models/qwen3.6-35b-a3b-q4_k_xl.md**, **docs/models/lfm2.5-8b-a1b.md**, **docs/models/lfm2-24b-a2b.md**.
+
 ## 8. Troubleshooting
 
 | Symptom | Meaning | Fix |
@@ -281,7 +302,8 @@ Full matrix: **docs/TESTING.md**.
 | `no .gguf artifacts` | wrong directory | pass the dir: `cne_setup path/to/models` |
 | `only N free on disk` warning | artifact larger than free space | free space or ignore (download/prepare will fail later otherwise) |
 | `finish_reason: "length"` in clients | max_tokens budget reached | client-side: raise `max_tokens` |
-| answer cut off mid-"thinking" notice | request ended inside suppressed reasoning | raise `max_tokens` or disable thinking |
+| answer cut off mid-"thinking" notice (LFM2.5) | model used full `max_tokens` on reasoning | raise `max_tokens` — LFM2.5 always thinks first |
+| answer cut off mid-"thinking" notice (Qwen3) | budget ended inside suppressed think block | raise `max_tokens` or use `think: false` |
 | boot: `no 'model' key in ...` | config missing model + none on argv | re-run `cne_setup` or pass model path |
 | port already in use | another instance running | change port via setup or `CNE_SETUP_PORT` |
 

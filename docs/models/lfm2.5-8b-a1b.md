@@ -24,7 +24,8 @@
 | Experts | 32 routed, top-4 active |
 | Context (native) | 128,000 tokens |
 | MTP | none — sequential decode only (`mtp_k=0`) |
-| Chat template | `LFM2.5-8B-A1B.jinja` (`enable_thinking` supported) |
+| Chat template | `LFM2.5-8B-A1B.jinja` |
+| Thinking | **Always on** — LFM2.5 always reasons; think blocks (or plain narration) appear in every reply. **`"think": false` does not disable thinking** — the server always returns reasoning content. Budget **`max_tokens` 128+** for short answers. |
 | Regeneration script | `tools/scripts/download-lfm2.5-8b-a1b.sh` |
 | Prepared artifact | `models/lfm2.5-8b-a1b/lfm25-8b-a1b-UD-Q4_K_XL-prepared.gguf` |
 
@@ -300,7 +301,7 @@ Example `models/server.json` for **4 GiB + streaming** (multi-tenant / LRU):
   "kernels": true,
   "mtp": 0,
   "session_max": 1,
-  "think": false,
+  "think": true,
   "host": "127.0.0.1",
   "port": 8080
 }
@@ -321,7 +322,7 @@ Example `models/server.json` for **4 GiB** (single-session, fastest):
   "kernels": true,
   "mtp": 0,
   "session_max": 1,
-  "think": false,
+  "think": true,
   "host": "127.0.0.1",
   "port": 8080
 }
@@ -333,7 +334,7 @@ Common:
 |---|---|---|
 | `session_max` | 2 | splits `ctx` evenly per parked chat |
 | `mtp` | 0 | no MTP head in this GGUF |
-| `think` | off for APIs | `"think": false` in `server.json` (or `CNE_THINK=0`); per-request `"enable_thinking": false`. On **lfm2moe**, the server injects an empty closed `` block so the model skips reasoning (not just hide it). With **`cne_gateway`**, also set `"allow_thinking": false` in `gateway.json`. |
+| `think` | **ignored** | LFM2.5 **always thinks**. `"think": false` and `enable_thinking: false` do not turn reasoning off — output is never stripped. Use **Qwen3.6** or **LFM2-24B** if you need no-think APIs. Set **`max_tokens` 128+**. Gateway `allow_thinking` does not change LFM2.5. |
 
 ## 7. Quick start
 
@@ -354,8 +355,7 @@ Smoke test:
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"hello"}],
-       "chat_template_kwargs":{"enable_thinking":false},
-       "max_tokens":32}'
+       "max_tokens":128}'
 ```
 
 For a **public multi-user API**, put `cne_gateway` in front — see
@@ -371,7 +371,7 @@ ctest --test-dir build -R server_e2e_lfm25_live --output-on-failure
 ```
 
 Sets `CNE_API_MODE=0` so the test is not blocked by a local `models/server.json`
-with API mode enabled. Thinking is off (`CNE_THINK=0` + `enable_thinking: false`).
+with API mode enabled. (`think` is ignored on LFM2.5 — model always reasons.)
 
 See [TESTING.md](../TESTING.md).
 

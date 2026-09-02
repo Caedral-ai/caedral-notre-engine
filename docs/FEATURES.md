@@ -456,10 +456,10 @@ Behavior notes:
   mid-stream stops generation cleanly - the socket is polled for liveness
   instead of trusting write() alone, so abandoned requests cannot hog the
   engine slot.
-- Thinking-off uses the Qwen3-family empty-think assistant prefix and is
-  deterministic once active. If a request budget expires while the model
-  is inside a suppressed think block, the response carries an explicit
-  notice instead of reasoning content.
+- **Thinking:** **Qwen3-family** (`qwen3*`) supports on/off via `think: false`
+  (closed empty think block + strip). **LFM2.5 always thinks** — reasoning is
+  always returned; `think` is ignored. **LFM2-24B** has no think blocks. See
+  **docs/SETUP.md** §7.1.
 - Context: prompts are prefilled in batch-sized chunks, so long agent
   system prompts (several thousand tokens) are safe. Size `ctx` to your
   workload; context costs ~20 KiB/token on hybrid-attention artifacts,

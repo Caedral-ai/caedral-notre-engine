@@ -1,6 +1,7 @@
 build/
 build-*/
 .cache/
+.docker-test/
 compile_commands.json
 
 # benchmark outputs (scripts live in bench/scripts/)
@@ -24,6 +25,7 @@ models/api_keys.txt
 __pycache__/
 
 # gateway / API secrets (local only)
+.env
 gateway/api_keys.local.txt
 gateway/gateway.json
 gateway/.env
